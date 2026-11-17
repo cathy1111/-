@@ -1,0 +1,541 @@
+#!/usr/bin/env python3
+"""
+用法：
+  python3 split_experiments.py preview --input input/test.pdf --out out
+  python3 split_experiments.py split --input input/test.pdf --out out --version V01
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+from datetime import date
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+import fitz  # PyMuPDF
+
+_OCR = None
+
+TIME_RE = re.compile(
+    r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*\D{0,4}日"
+)
+BAD_FIELD_RE = re.compile(r'[\\/:*?"<>|\s\-·.、，,]+')
+TITLE_HINT_RE = re.compile(r".+(记录表|测定表|明细表|试验表)$")
+VEHICLE_RE = re.compile(r"([A-Za-z])\s*(\d{2,4})(?!\d)")
+
+
+@dataclass
+class PageMeta:
+    page_index: int
+    experiment: str
+    vehicle: str
+    time_raw: str  
+    time_code: str 
+    location_raw: str
+    group_key: str
+    filename_base: str
+    note: str = ""
+
+
+def get_ocr():
+    global _OCR
+    if _OCR is None:
+        from paddleocr import PaddleOCR
+
+        root = Path(__file__).resolve().parent / "soft" / "paddleocr_models"
+        cache = Path.home() / ".paddleocr" / "whl"
+        models = {}
+        for key, name, sub in [
+            ("det_model_dir", "ch_PP-OCRv4_det_infer", "det/ch"),
+            ("rec_model_dir", "ch_PP-OCRv4_rec_infer", "rec/ch"),
+            ("cls_model_dir", "ch_ppocr_mobile_v2.0_cls_infer", "cls"),
+        ]:
+            candidates = [root / name, root / "from_cache" / sub / name, cache / sub / name]
+            found = next((d for d in candidates if (d / "inference.pdmodel").is_file() and (d / "inference.pdiparams").is_file()), None)
+            if found is None:
+                raise FileNotFoundError(f"OCR model missing: {name}. Keep the original soft/paddleocr_models folder.")
+            models[key] = str(found)
+        _OCR = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False, use_gpu=False, **models)
+    return _OCR
+
+
+def sanitize_field(s: str) -> str:
+    s = (s or "").strip()
+    s = BAD_FIELD_RE.sub("", s)
+    return s or "未知"
+
+
+def format_time_code(y: str, m: str, d: str) -> str:
+    try:
+        return date(int(y), int(m), int(d)).strftime("%Y%m%d")
+    except ValueError:
+        return ""
+
+
+def display_time(y: str, m: str, d: str) -> str:
+    return f"{int(y)}年{int(m)}月{int(d)}日"
+
+
+def build_filename_base(experiment: str, vehicle: str, time_code: str, location: str) -> str:
+    return "-".join(
+        [
+            sanitize_field(experiment),
+            sanitize_field(vehicle),
+            sanitize_field(time_code) if time_code else "未知时间",
+            sanitize_field(location),
+        ]
+    )
+
+
+def render_top_crop(page: fitz.Page, top_ratio: float = 0.4, zoom: float = 2.5) -> bytes:
+    r = page.rect
+    clip = fitz.Rect(0, 0, r.width, r.height * top_ratio)
+    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, alpha=False)
+    return pix.tobytes("png")
+
+
+def ocr_texts(png_bytes: bytes) -> List[Tuple[str, float]]:
+    import numpy as np
+    from io import BytesIO
+    from PIL import Image
+
+    img = Image.open(BytesIO(png_bytes)).convert("RGB")
+    arr = np.array(img)
+    result = get_ocr().ocr(arr, cls=True)
+    items: List[Tuple[float, float, str, float]] = []
+    if not result or result[0] is None:
+        return []
+    for line in result[0]:
+        box, (text, conf) = line
+        xs = [p[0] for p in box]
+        ys = [p[1] for p in box]
+        items.append((min(ys), min(xs), text.strip(), float(conf)))
+    items.sort(key=lambda x: (round(x[0] / 12), x[1]))
+    return [(t, c) for _, _, t, c in items]
+
+
+def extract_fields(texts: List[Tuple[str, float]]) -> Tuple[str, str, str, str, str, str]:
+
+    joined = " ".join(t for t, _ in texts)
+    note_parts: List[str] = []
+
+    experiment = ""
+    for t, _ in texts[:8]:
+        t2 = t.replace(" ", "")
+        if TITLE_HINT_RE.search(t2) and "试验时间" not in t2 and "试验地点" not in t2:
+            experiment = t2
+            break
+    if not experiment:
+        for t, _ in texts[:5]:
+            t2 = t.replace(" ", "")
+            if len(t2) >= 6 and "条件" not in t2 and "时间" not in t2:
+                experiment = t2
+                break
+
+    # ---- 时间 ----
+    time_disp, time_code = "", ""
+    m = TIME_RE.search(joined)
+    if m:
+        time_disp = display_time(m.group(1), m.group(2), m.group(3))
+        time_code = format_time_code(m.group(1), m.group(2), m.group(3))
+    else:
+        for i, (t, _) in enumerate(texts):
+            if "试验时间" in t or ("时间" in t and "摩托" not in t):
+                window = " ".join(x for x, _ in texts[i : i + 4])
+                m2 = TIME_RE.search(window)
+                if m2:
+                    time_disp = display_time(m2.group(1), m2.group(2), m2.group(3))
+                    time_code = format_time_code(m2.group(1), m2.group(2), m2.group(3))
+                    break
+
+    # ---- 地点 ----
+    loc_s = ""
+    for i, (t, _) in enumerate(texts):
+        if "试验地点" in t or t.endswith("地点"):
+            after = re.split(r"试验地点|地点", t, maxsplit=1)
+            if len(after) == 2 and after[1].strip():
+                cand = after[1].strip(" :：.-·、")
+                if cand and "气象" not in cand:
+                    loc_s = cand
+                    break
+            for j in range(i + 1, min(i + 5, len(texts))):
+                cand = texts[j][0]
+                if any(
+                    k in cand
+                    for k in (
+                        "试验",
+                        "气象",
+                        "天气",
+                        "温度",
+                        "湿度",
+                        "风力",
+                        "海拔",
+                        "场地",
+                        "车辆",
+                        "时间",
+                        "车号",
+                    )
+                ):
+                    continue
+                if TIME_RE.search(cand):
+                    continue
+                cand2 = re.sub(r"^[\s:：.\-—_/·、]+|[\s:：.\-—_/·、]+$", "", cand)
+                if cand2 and not re.fullmatch(r"[\d.]+", cand2):
+                    loc_s = cand2
+                    break
+            break
+    if not loc_s:
+        mloc = re.search(
+            r"试验地点\s*[:：]?\s*([^\s试验气象温湿风力海拔场地车辆车号]{2,20})",
+            joined,
+        )
+        if mloc:
+            loc_s = mloc.group(1).strip(" :：.-·、")
+    loc_s = re.sub(r"(气象条件|天气|温度).*$", "", loc_s).strip()
+
+    # ---- 车型/车号 ----
+    def parse_vehicle(s: str) -> str:
+        m_v = VEHICLE_RE.search(s.replace(" ", ""))
+        if not m_v:
+            return ""
+        return (m_v.group(1) + m_v.group(2)).upper()
+
+    vehicle = ""
+    for i, (t, _) in enumerate(texts):
+        if "车号" not in t:
+            continue
+        vehicle = parse_vehicle(t)
+        if vehicle:
+            break
+        for j in range(i + 1, min(i + 4, len(texts))):
+            cand = texts[j][0].replace(" ", "")
+            if any(k in cand for k in ("燃油", "里程", "摩托", "负载", "油量", "车辆", "编号")):
+                continue
+            # 只接受短文本，避免仪器序列号
+            if len(cand) > 8:
+                continue
+            vehicle = parse_vehicle(cand)
+            if vehicle:
+                break
+            if re.fullmatch(r"[A-Za-z]?\d{2,5}", cand):
+                vehicle = cand.upper()
+                break
+        break
+    if not vehicle:
+        for i, (t, _) in enumerate(texts):
+            if "车辆条件" not in t and "车号" not in t:
+                continue
+            for j in range(i, min(i + 6, len(texts))):
+                cand = texts[j][0].replace(" ", "")
+                if len(cand) > 8:
+                    continue
+                if any(k in cand for k in ("燃油", "里程", "摩托", "负载", "油量", "条件", "编号")):
+                    continue
+                vehicle = parse_vehicle(cand)
+                if vehicle:
+                    break
+            break
+
+    if not experiment:
+        note_parts.append("实验名称未识别")
+    if not vehicle:
+        note_parts.append("车号未识别")
+    if not time_code:
+        note_parts.append("时间未识别")
+    if not loc_s:
+        note_parts.append("地点未识别")
+
+    return experiment, vehicle, time_disp, time_code, loc_s, ";".join(note_parts)
+
+
+def scan_pdf(
+    pdf_path: Path,
+    top_ratio: float = 0.4,
+    max_pages: Optional[int] = None,
+) -> List[PageMeta]:
+    doc = fitz.open(pdf_path)
+    n = doc.page_count if max_pages is None else min(doc.page_count, max_pages)
+    metas: List[PageMeta] = []
+    prev: Optional[PageMeta] = None
+
+    print(f"共 {doc.page_count} 页，将处理前 {n} 页 …", flush=True)
+    for i in range(n):
+        page = doc[i]
+        png = render_top_crop(page, top_ratio=top_ratio)
+        texts = ocr_texts(png)
+        experiment, vehicle, time_disp, time_code, loc_s, note = extract_fields(texts)
+
+        # Missing values remain unknown; never borrow fields from a different experiment.
+        group_key = "|".join([experiment, vehicle, time_code, loc_s]) if all([experiment, vehicle, time_code, loc_s]) else f"未识别_p{i+1}"
+
+        fname = build_filename_base(experiment, vehicle, time_code, loc_s)
+        meta = PageMeta(
+            page_index=i,
+            experiment=experiment,
+            vehicle=vehicle,
+            time_raw=time_disp,
+            time_code=time_code,
+            location_raw=loc_s,
+            group_key=group_key,
+            filename_base=fname,
+            note=note,
+        )
+        metas.append(meta)
+        if not group_key.startswith("未识别_"):
+            prev = meta
+        print(
+            f"  [{i+1}/{n}] {fname}  ({note})" if note else f"  [{i+1}/{n}] {fname}",
+            flush=True,
+        )
+
+    doc.close()
+    return metas
+
+
+def write_preview_csv(metas: List[PageMeta], csv_path: Path, version: str) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "页码(从1开始)",
+                "实验名称",
+                "车号",
+                "试验时间",
+                "时间码",
+                "试验地点",
+                "分组key",
+                "文件名(不含版本)",
+                "预计文件名",
+                "备注",
+            ]
+        )
+        for m in metas:
+            w.writerow(
+                [
+                    m.page_index + 1,
+                    m.experiment,
+                    m.vehicle,
+                    m.time_raw,
+                    m.time_code,
+                    m.location_raw,
+                    m.group_key,
+                    m.filename_base,
+                    f"{m.filename_base}-{version}.pdf",
+                    m.note,
+                ]
+            )
+    print(f"已写入预览: {csv_path}")
+
+
+def group_contiguous(metas: List[PageMeta]) -> List[Tuple[PageMeta, List[int]]]:
+    """相邻且 group_key 相同的页归为一组；用组内首页 meta 命名。"""
+    if not metas:
+        return []
+    groups: List[Tuple[PageMeta, List[int]]] = []
+    cur_meta = metas[0]
+    cur_pages = [metas[0].page_index]
+    for m in metas[1:]:
+        if m.group_key == cur_meta.group_key:
+            cur_pages.append(m.page_index)
+            # 补全命名字段
+            if not cur_meta.experiment and m.experiment:
+                cur_meta.experiment = m.experiment
+            if not cur_meta.vehicle and m.vehicle:
+                cur_meta.vehicle = m.vehicle
+            cur_meta.filename_base = build_filename_base(
+                cur_meta.experiment,
+                cur_meta.vehicle,
+                cur_meta.time_code,
+                cur_meta.location_raw,
+            )
+        else:
+            groups.append((cur_meta, cur_pages))
+            cur_meta = m
+            cur_pages = [m.page_index]
+    groups.append((cur_meta, cur_pages))
+    return groups
+
+
+def unique_filename(out_dir: Path, base: str, used: dict) -> Path:
+    used[base] = used.get(base, 0) + 1
+    n = used[base]
+    name = f"{base}.pdf" if n == 1 else f"{base}_{n}.pdf"
+    while (out_dir / name).exists():
+        n += 1
+        name = f"{base}_{n}.pdf"
+    used[base] = n
+    return out_dir / name
+
+
+def split_pdf(
+    pdf_path: Path,
+    metas: List[PageMeta],
+    out_dir: Path,
+    version: str,
+    merge_contiguous: bool = False,
+) -> List[Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    groups = group_contiguous(metas) if merge_contiguous else [(m, [m.page_index]) for m in metas]
+    src = fitz.open(pdf_path)
+    used: dict = {}
+    written: List[Path] = []
+
+    for meta, pages in groups:
+        base = f"{meta.filename_base}-{version}"
+        dest = unique_filename(out_dir, base, used)
+        new_doc = fitz.open()
+        for pi in pages:
+            new_doc.insert_pdf(src, from_page=pi, to_page=pi)
+        new_doc.save(dest)
+        new_doc.close()
+        written.append(dest)
+        page_human = ",".join(str(p + 1) for p in pages)
+        print(f"  -> {dest.name}  (页 {page_human})")
+
+    src.close()
+    return written
+
+
+def load_preview_csv(csv_path: Path) -> List[PageMeta]:
+    metas: List[PageMeta] = []
+    with csv_path.open(encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            experiment = row.get("实验名称", "")
+            vehicle = row.get("车号", "")
+            time_raw = row.get("试验时间", "")
+            time_code = row.get("时间码", "")
+            location = row.get("试验地点", "")
+            group_key = row.get("分组key", "")
+            filename_base = row.get("文件名(不含版本)", "")
+            if not time_code and time_raw:
+                m = TIME_RE.search(time_raw)
+                if m:
+                    time_code = format_time_code(m.group(1), m.group(2), m.group(3))
+            filename_base = build_filename_base(experiment, vehicle, time_code, location)
+            if not group_key:
+                group_key = f"{sanitize_field(time_code)}_{sanitize_field(location)}"
+            metas.append(
+                PageMeta(
+                    page_index=int(row["页码(从1开始)"]) - 1,
+                    experiment=experiment,
+                    vehicle=vehicle,
+                    time_raw=time_raw,
+                    time_code=time_code,
+                    location_raw=location,
+                    group_key=group_key,
+                    filename_base=filename_base,
+                    note=row.get("备注", ""),
+                )
+            )
+    return metas
+
+
+def normalize_version(v: str) -> str:
+    v = (v or "V011").strip().upper()
+    if not v.startswith("V"):
+        v = "V" + v
+    if not re.fullmatch(r"V\d{1,4}", v):
+        raise ValueError("Version must look like V01 or V011")
+    return v
+
+
+def cmd_preview(args: argparse.Namespace) -> int:
+    pdf = Path(args.input).expanduser().resolve()
+    out_dir = Path(args.out).expanduser().resolve()
+    version = normalize_version(args.version)
+    if not pdf.exists():
+        print(f"找不到输入文件: {pdf}", file=sys.stderr)
+        return 1
+    metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages)
+    write_preview_csv(metas, out_dir / "preview.csv", version)
+
+    groups = [(m, [m.page_index]) for m in metas]
+    print(f"\n预计拆成 {len(groups)} 个实验文件（版本 {version}）：")
+    for meta, pages in groups:
+        print(f"  {meta.filename_base}-{version}.pdf  ← 页 {[p+1 for p in pages]}")
+    print("\n请打开 out/preview.csv 核对；确认无误后执行：")
+    print(
+        f"  python3 split_experiments.py split --input {pdf} --out {out_dir} --version {version}"
+    )
+    return 0
+
+
+def cmd_split(args: argparse.Namespace) -> int:
+    pdf = Path(args.input).expanduser().resolve()
+    out_dir = Path(args.out).expanduser().resolve()
+    version = normalize_version(args.version)
+    if not pdf.exists():
+        print(f"找不到输入文件: {pdf}", file=sys.stderr)
+        return 1
+
+    preview_csv = out_dir / "preview.csv"
+    if preview_csv.exists() and not args.rescan:
+        print(f"读取已有预览 {preview_csv} （若要重新 OCR 加 --rescan）")
+        metas = load_preview_csv(preview_csv)
+    else:
+        metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages)
+        write_preview_csv(metas, preview_csv, version)
+
+    print(f"开始写出拆分 PDF（版本 {version}）…")
+    written = split_pdf(pdf, metas, out_dir, version)
+    print(f"完成，共 {len(written)} 个文件 -> {out_dir}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="按试验时间+地点拆分实验记录 PDF；文件名=实验名称-车号-时间-地点-版本"
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+
+    def add_common(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--input", "-i", required=True, help="输入 PDF 路径")
+        sp.add_argument("--out", "-o", default="out", help="输出目录")
+        sp.add_argument(
+            "--version",
+            "-V",
+            default="V011",
+            help="文件名末尾版本号，默认 V011",
+        )
+        sp.add_argument(
+            "--top-ratio",
+            type=float,
+            default=0.4,
+            help="OCR 顶部裁剪高度占页面比例，默认 0.4（需含车号行）",
+        )
+        sp.add_argument(
+            "--max-pages",
+            type=int,
+            default=None,
+            help="仅处理前 N 页（调试用）",
+        )
+
+    sp_prev = sub.add_parser("preview", help="OCR 预览，生成 preview.csv")
+    add_common(sp_prev)
+    sp_prev.set_defaults(func=cmd_preview)
+
+    sp_split = sub.add_parser("split", help="按分组写出单实验 PDF")
+    add_common(sp_split)
+    sp_split.add_argument(
+        "--rescan",
+        action="store_true",
+        help="忽略已有 preview.csv，重新 OCR",
+    )
+    sp_split.set_defaults(func=cmd_split)
+    return p
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
