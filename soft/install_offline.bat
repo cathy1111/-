@@ -2,11 +2,12 @@
 setlocal EnableExtensions DisableDelayedExpansion
 set "TASK_SOFT=%~dp0"
 cd /d "%TASK_SOFT%.."
-echo Offline installer - repair version
+echo Verified offline installer - no package-index access
 echo Keep this file in pro\soft. Do not run inside a ZIP file.
 echo.
 if not exist "%TASK_SOFT%requirements-win.txt" goto missing
-if not exist "%TASK_SOFT%wheels\paddlepaddle-2.6.1-cp39-cp39-win_amd64.whl" goto missing
+if not exist "%TASK_SOFT%offline-manifest.json" goto unprepared
+if not exist "%TASK_SOFT%offline_bundle.py" goto unprepared
 
 echo [1/5] Checking Visual C++ runtime...
 if not exist "%TASK_SOFT%vcredist\vc_redist.x64.exe" goto no_vc
@@ -33,13 +34,21 @@ if not defined TASK_PY goto no_python
 echo Using: "%TASK_PY%"
 "%TASK_PY%" -V
 
-echo [3/5] Installing offline dependencies...
-"%TASK_PY%" -m pip --version >nul 2>&1
-if errorlevel 1 "%TASK_PY%" -m ensurepip
+echo [3/5] Verifying and installing the prepared offline bundle...
+"%TASK_PY%" "%TASK_SOFT%offline_bundle.py" verify
 if errorlevel 1 goto failed
-"%TASK_PY%" -m pip install --no-index --find-links="%TASK_SOFT%wheels" "%TASK_SOFT%wheels\paddlepaddle-2.6.1-cp39-cp39-win_amd64.whl"
+set "PIP_NO_INDEX=1"
+set "PIP_DISABLE_PIP_VERSION_CHECK=1"
+set "PIP_NO_CACHE_DIR=1"
+set "TASK_BASE=%TASK_PY%"
+if not exist "%TASK_SOFT%..\.venv\Scripts\python.exe" "%TASK_BASE%" -m venv "%TASK_SOFT%..\.venv"
 if errorlevel 1 goto failed
-"%TASK_PY%" -m pip install --no-index --find-links="%TASK_SOFT%wheels" -r "%TASK_SOFT%requirements-win.txt"
+set "TASK_PY=%TASK_SOFT%..\.venv\Scripts\python.exe"
+"%TASK_PY%" -c "import sys,struct; sys.exit(0 if sys.version_info[:2]==(3,9) and struct.calcsize('P')==8 else 1)"
+if errorlevel 1 goto failed
+"%TASK_PY%" -m pip install --no-index --no-cache-dir --find-links="%TASK_SOFT%wheelhouse" -r "%TASK_SOFT%requirements-lock.txt"
+if errorlevel 1 goto failed
+"%TASK_PY%" -m pip check
 if errorlevel 1 goto failed
 
 echo [4/5] Checking local OCR model files...
@@ -50,13 +59,13 @@ if errorlevel 1 goto model_missing
 call :check_model ch_ppocr_mobile_v2.0_cls_infer cls\ch_ppocr_mobile_v2.0_cls_infer
 if errorlevel 1 goto model_missing
 
-echo [5/5] Checking Python imports...
-"%TASK_PY%" -c "import fitz, paddle; from paddleocr import PaddleOCR; print('Dependency imports OK')"
+echo [5/5] Checking imports and local OCR model initialization...
+"%TASK_PY%" -c "import fitz, paddle; from split_experiments import get_ocr; get_ocr(); print('Local OCR initialization OK')"
 if errorlevel 1 goto failed
 echo.
 echo SUCCESS: dependency installation and model-file checks passed.
 echo Open pro\run_preview.bat to recognize a PDF.
-echo OCR model initialization will be checked when recognition starts.
+echo Local model initialization has also passed.
 pause
 exit /b 0
 
@@ -83,6 +92,12 @@ if exist "%TASK_SOFT%paddleocr_models\%~1\inference.pdmodel" if exist "%TASK_SOF
 if exist "%TASK_SOFT%paddleocr_models\from_cache\%~2\inference.pdmodel" if exist "%TASK_SOFT%paddleocr_models\from_cache\%~2\inference.pdiparams" exit /b 0
 if exist "%USERPROFILE%\.paddleocr\whl\%~2\inference.pdmodel" if exist "%USERPROFILE%\.paddleocr\whl\%~2\inference.pdiparams" exit /b 0
 echo Missing model: %~1
+exit /b 1
+:unprepared
+echo ERROR: complete offline package has not been prepared.
+echo On a connected Windows PC, run soft\prepare_online.bat first.
+echo Copy offline-package.zip to this PC, extract to C:\pro, and retry.
+pause
 exit /b 1
 :missing
 echo ERROR: required package files are missing.
