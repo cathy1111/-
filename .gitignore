@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+input/
+out/
+soft/python/
+soft/wheels/
+soft/vcredist/
+soft/paddleocr_models/
+.env
+.DS_Store
