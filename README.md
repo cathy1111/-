@@ -2,6 +2,17 @@
 
 本仓库提供现有 `pro` 程序的修复补丁。**不是完整离线安装包**，不包含原来的 Python 安装包、OCR 模型和离线依赖。
 
+## 新增：公司电脑完全离线安装
+
+**先在联网电脑准备一次，公司电脑无需联网。**
+
+1. 下载此修复分支的 ZIP，将文件合并到已运行成功的 `C:\pro`，保留原模型和安装包。
+2. 在联网 Windows 电脑上运行 `soft/prepare_online.bat`，等待检查成功并生成 `offline-package.zip`。
+3. 将该 ZIP 复制到公司电脑，解压成 `C:\pro`，运行 `soft/install_offline.bat`。
+4. 安装成功后运行 `run_preview.bat` 或 `run_export.bat`。
+
+[完整离线操作说明](OFFLINE_GUIDE.md)。GitHub 源码 ZIP 本身不含模型、Python 安装包和完整依赖，不能直接当作完整离线包。准备程序会在干净环境中验证禁止软件源访问的安装及本地模型初始化，成功后才打包。这里尚未实际生成大容量离线包，需在你的联网 Windows 电脑上运行验证。
+
 ## 下载修复版
 
 - [打开修复版文件](https://github.com/cathy1111/-/tree/fix/offline-windows)
@@ -11,7 +22,7 @@
 
 ## 使用
 
-1. 双击 `soft/install_offline.bat`，完成安装，出现 **SUCCESS** 后再继续。
+1. 完整离线包请运行 `soft/install_offline.bat`；尚未准备离线包的联网电脑可使用 `soft/install_online.bat`。出现 **SUCCESS** 后再继续。
 2. 双击 `run_preview.bat`，把一个 PDF 拖入黑色窗口，按回车，查看 `out/preview.csv`。
 3. 双击 `run_export.bat`，拖入 PDF，按回车，生成单页 PDF。
 
