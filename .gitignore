@@ -10,3 +10,10 @@ soft/vcredist/
 soft/paddleocr_models/
 .env
 .DS_Store
+
+.bundle-build/
+.bundle-check/
+soft/wheelhouse/
+soft/offline-manifest.json
+soft/requirements-lock.txt
+offline-package.zip
