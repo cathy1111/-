@@ -24,3 +24,7 @@
 修复安装脚本的编码与换行、解释器版本选择、安装失败误报；明确使用本地模型；识别范围扩大到页面顶部 40%；默认逐页导出，避免不同实验误合并；不覆盖已有 PDF。
 
 已完成 Python 语法、日期/版本校验、分页导出、重名保护、批处理 ASCII/CRLF 检查。**尚未在 Windows 实测安装流程，也未验证真实手写识别准确率。**手写文字仍可能误读，重要记录请核对。
+
+## 离线包缺少 httpx 等依赖时
+
+如果出现 `No matching distribution found for httpx`，说明本地 wheels 不完整。联网后运行 `soft/install_online.bat`，它使用本地 wheel，并从 PyPI 补全缺少的依赖。此入口不是完全离线安装；不会下载或更改你的 PDF。安装成功后再运行 `run_preview.bat`。
