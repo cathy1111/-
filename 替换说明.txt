@@ -1,0 +1,50 @@
+原程序修复补丁（不包含大型模型和离线安装包）
+
+1. 先关闭之前报错的黑色窗口。
+2. 备份原 pro 文件夹中的 split_experiments.py 和 soft/install_offline.bat。
+3. 将此补丁解压后的内容复制到原 pro 文件夹，选择替换同名文件。
+   注意是合并文件夹，不是删除原 soft 再放入新 soft。
+   必须保留原 soft 中的 python、wheels、vcredist、paddleocr_models 四个文件夹。
+
+替换后目录应为：
+pro/
+  split_experiments.py       （替换）
+  run_preview.bat           （新增：识别预览）
+  run_export.bat            （新增：重新识别并逐页导出）
+  soft/
+    install_offline.bat      （替换）
+    requirements-win.txt
+    python/                 （保留原内容）
+    wheels/                 （保留原内容）
+    vcredist/               （保留原内容）
+    paddleocr_models/       （保留原内容）
+
+4. 双击 soft/install_offline.bat，Windows 如请求安装权限请按电脑的权限要求操作。
+   按提示完成 Python 安装。此补丁固定使用 Python 3.9 的64位版本。
+   看到 SUCCESS 才表示依赖安装与模型文件检查通过。
+   看到 FAILED 或 ERROR，请将第一条错误开始的窗口截图发回。
+   如组织策略禁止安装，需要由电脑管理员处理权限，本补丁无法绕过限制。
+5. 安装成功后，回到 pro 文件夹双击 run_preview.bat。
+   从资源管理器拖入一个PDF到黑色窗口，按回车。识别结果在 out/preview.csv。
+6. 要导出PDF，双击 run_export.bat，同样拖入PDF并回车。
+   该入口会重新识别原PDF，不复用可能属于其他PDF的旧preview.csv。
+   PDF输出到 out 文件夹。默认每页单独导出，版本V011。
+   多次导出不会覆盖已有PDF，重名文件增加_2、_3等后缀。
+
+提示：
+英文安装提示是有意保留，用于避免原批处理中文编码导致的命令解析问题。
+安装脚本使用 ASCII 编码和 Windows CRLF 换行，不要通过聊天复制粘贴重建。
+直接使用包内文件，不要用文本编辑器改变编码或换行方式。
+
+修改内容：
+安装错误时停止，不再把失败显示为安装成功；固定Python版本和位数；
+直接使用随包本地模型，CPU运行，不需要API；表头范围从28%扩大到40%；
+CSV字段更名为车号；不再自动借用上一页信息；默认每页单独导出；
+校验真实日期；同名输出不覆盖；读取手工修改CSV时重新构建命名。
+如果手动执行 split 命令而不加 --rescan，仍会读取 out/preview.csv；
+不要让不同PDF共用未经检查的旧preview.csv。推荐使用本补丁的启动入口。
+
+验证边界：
+已通过Python语法、日期校验、版本校验、逐页导出、重名保护与脚本ASCII/CRLF检查。
+当前环境不是Windows，不能实测Windows安装流程；未安装PaddleOCR模型，
+尚未验证真实手写识别准确率。扩大裁剪范围可以避免漏掉车号，但不能保证手写识别正确。
