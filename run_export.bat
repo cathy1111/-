@@ -17,6 +17,8 @@ pause
 exit /b 0
 :find_python
 set "TASK_PY="
+call :try_python "%~dp0.venv\Scripts\python.exe"
+if defined TASK_PY exit /b
 call :try_python "%LocalAppData%\Programs\Python\Python39\python.exe"
 if defined TASK_PY exit /b
 call :try_python "%ProgramFiles%\Python39\python.exe"
