@@ -130,7 +130,7 @@ class MultiVehicleTests(unittest.TestCase):
 
     def test_windows_entrypoints(self):
         root=Path(__file__).parent
-        for name in ['import_vehicle_outline.bat','make_demo_data.bat']:
+        for name in ['import_vehicle_outline_cli.bat','open_outline_manager.bat','make_demo_data.bat']:
             raw=(root/name).read_bytes();raw.decode('ascii')
             self.assertNotIn(b'\n',raw.replace(b'\r\n',b''))
             self.assertEqual(raw.count(b'\r\n:find_python\r\n'),1)
