@@ -39,6 +39,8 @@ class PageMeta:
     group_key: str
     filename_base: str
     note: str = ""
+    vehicle_raw: str = ""
+    location_ocr_raw: str = ""
 
 
 def get_ocr():
@@ -459,6 +461,74 @@ def extract_fields(texts: List[Tuple[str, float]]) -> Tuple[str, str, str, str, 
     return experiment, vehicle, time_disp, time_code, loc_s, ";".join(note_parts)
 
 
+def load_confirmed_rules(path: Optional[Path] = None):
+    import json
+    path = path or Path(__file__).resolve().parent / "field_rules.json"
+    if not path.is_file():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data,dict) or not isinstance(data.get("rules",[]),list):
+        raise ValueError("field_rules.json 格式错误")
+    for rule in data.get("rules",[]):
+        if not isinstance(rule,dict) or not isinstance(rule.get("experiment_contains"),str) or not rule["experiment_contains"]:
+            raise ValueError("纠正规则必须指定非空的 experiment_contains")
+        for key in ("vehicle_aliases","place_aliases"):
+            aliases=rule.get(key,{})
+            if not isinstance(aliases,dict) or any(not isinstance(k,str) or not k or not isinstance(v,str) or not v for k,v in aliases.items()):
+                raise ValueError("纠正规则的别名必须是非空文本")
+    return data.get("rules",[])
+
+
+def apply_confirmed_rules(experiment, vehicle, place, rules):
+    changes=[]
+    # Only a full observed error value in a matching form can trigger correction.
+    # Never fuzzy-match all locations or apply one vehicle number to all forms.
+    vehicle_targets=set();place_targets=set()
+    for rule in rules:
+        if compact_text(rule["experiment_contains"]) not in compact_text(experiment):continue
+        if vehicle in rule.get("vehicle_aliases",{}):vehicle_targets.add(rule["vehicle_aliases"][vehicle])
+        if place in rule.get("place_aliases",{}):place_targets.add(rule["place_aliases"][place])
+    if len(vehicle_targets)==1:
+        corrected=next(iter(vehicle_targets))
+        changes.append(f"已确认规则修正车号：{vehicle}→{corrected}")
+        vehicle=corrected
+    elif len(vehicle_targets)>1:changes.append("车号纠正规则冲突，未自动修改")
+    if len(place_targets)==1:
+        corrected=next(iter(place_targets))
+        changes.append(f"已确认规则修正地点：{place}→{corrected}")
+        place=corrected
+    elif len(place_targets)>1:changes.append("地点纠正规则冲突，未自动修改")
+    return vehicle,place,changes
+
+
+def pdf_identity(path: Path):
+    import hashlib
+    h=hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda:stream.read(1024*1024),b''):h.update(chunk)
+    with fitz.open(path) as doc:count=doc.page_count
+    return {"sha256":h.hexdigest(),"pages":count}
+
+
+def write_preview_identity(pdf_path: Path, out_dir: Path):
+    import json
+    out_dir.mkdir(parents=True,exist_ok=True)
+    path=out_dir/"preview-source.json"
+    path.write_text(json.dumps(pdf_identity(pdf_path),ensure_ascii=False,indent=2),encoding='utf-8')
+
+
+def verify_preview_identity(pdf_path: Path, out_dir: Path):
+    import json
+    path=out_dir/"preview-source.json"
+    if not path.is_file():
+        raise ValueError("预览清单缺少原PDF校验信息。请先用新版 run_preview.bat 生成一次清单，再修改并导出。")
+    expected=json.loads(path.read_text(encoding='utf-8'))
+    actual=pdf_identity(pdf_path)
+    if expected!=actual:
+        raise ValueError("选择的PDF与当前preview.csv不对应。请拖入生成该清单时的同一份原PDF，或重新生成预览。")
+    return actual['pages']
+
+
 def scan_pdf(
     pdf_path: Path,
     top_ratio: float = 0.4,
@@ -469,6 +539,7 @@ def scan_pdf(
     n = doc.page_count if max_pages is None else min(doc.page_count, max_pages)
     metas: List[PageMeta] = []
     prev: Optional[PageMeta] = None
+    confirmed_rules = load_confirmed_rules()
 
     print(f"共 {doc.page_count} 页，将处理前 {n} 页 …", flush=True)
     for i in range(n):
@@ -500,6 +571,8 @@ def scan_pdf(
         if not vehicle:
             print(f"  第{i+1}页车号未确定，正在放大复识别…",flush=True)
             vehicle, vehicle_note = retry_vehicle(page, boxes, debug_dir, i)
+        vehicle_raw, location_ocr_raw = vehicle, loc_s
+        vehicle, loc_s, corrections = apply_confirmed_rules(experiment, vehicle, loc_s, confirmed_rules)
         notes = [part for part in note.split(";") if part and part not in {"车号未识别", "时间未识别", "地点未识别"}]
         if not time_code:
             notes.append("时间未识别")
@@ -509,6 +582,7 @@ def scan_pdf(
             notes.append("车号未识别")
         if vehicle_note:
             notes.append(vehicle_note)
+        notes.extend(corrections)
         note = ";".join(notes)
 
         # Missing values remain unknown; never borrow fields from a different experiment.
@@ -525,6 +599,8 @@ def scan_pdf(
             group_key=group_key,
             filename_base=fname,
             note=note,
+            vehicle_raw=vehicle_raw,
+            location_ocr_raw=location_ocr_raw,
         )
         metas.append(meta)
         if not group_key.startswith("未识别_"):
@@ -554,6 +630,8 @@ def write_preview_csv(metas: List[PageMeta], csv_path: Path, version: str) -> No
                 "文件名(不含版本)",
                 "预计文件名",
                 "备注",
+                "OCR原始车号",
+                "OCR原始地点",
             ]
         )
         for m in metas:
@@ -569,6 +647,8 @@ def write_preview_csv(metas: List[PageMeta], csv_path: Path, version: str) -> No
                     m.filename_base,
                     f"{m.filename_base}-{version}.pdf",
                     m.note,
+                    m.vehicle_raw,
+                    m.location_ocr_raw,
                 ]
             )
     print(f"已写入预览: {csv_path}")
@@ -659,6 +739,10 @@ def load_preview_csv(csv_path: Path) -> List[PageMeta]:
                 m = TIME_RE.search(time_raw)
                 if m:
                     time_code = format_time_code(m.group(1), m.group(2), m.group(3))
+            if time_code:
+                checked=normalized_date_value(time_code)
+                if not checked:raise ValueError("预览清单日期无效："+time_code+"；请填写8位YYYYMMDD")
+                time_code=checked
             filename_base = build_filename_base(experiment, vehicle, time_code, location)
             if not group_key:
                 group_key = f"{sanitize_field(time_code)}_{sanitize_field(location)}"
@@ -673,6 +757,8 @@ def load_preview_csv(csv_path: Path) -> List[PageMeta]:
                     group_key=group_key,
                     filename_base=filename_base,
                     note=row.get("备注", ""),
+                    vehicle_raw=row.get("OCR原始车号", ""),
+                    location_ocr_raw=row.get("OCR原始地点", ""),
                 )
             )
     return metas
@@ -696,6 +782,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
         return 1
     metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages, debug_dir=out_dir / "vehicle_debug")
     write_preview_csv(metas, out_dir / "preview.csv", version)
+    write_preview_identity(pdf, out_dir)
 
     groups = [(m, [m.page_index]) for m in metas]
     print(f"\n预计拆成 {len(groups)} 个实验文件（版本 {version}）：")
@@ -718,11 +805,16 @@ def cmd_split(args: argparse.Namespace) -> int:
 
     preview_csv = out_dir / "preview.csv"
     if preview_csv.exists() and not args.rescan:
-        print(f"读取已有预览 {preview_csv} （若要重新 OCR 加 --rescan）")
+        count=verify_preview_identity(pdf,out_dir)
+        print(f"读取已核对预览 {preview_csv}；保留表格修改，不重新OCR。")
         metas = load_preview_csv(preview_csv)
+        page_numbers=[m.page_index for m in metas]
+        if not page_numbers or len(set(page_numbers))!=len(page_numbers) or any(i<0 or i>=count for i in page_numbers):
+            raise ValueError("预览清单的页码重复、为空或超出原PDF范围，请检查清单。")
     else:
         metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages, debug_dir=out_dir / "vehicle_debug")
         write_preview_csv(metas, preview_csv, version)
+        write_preview_identity(pdf,out_dir)
 
     print(f"开始写出拆分 PDF（版本 {version}）…")
     written = split_pdf(pdf, metas, out_dir, version)
