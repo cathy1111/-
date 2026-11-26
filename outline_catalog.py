@@ -17,7 +17,7 @@ NUMBER_RE = re.compile(r'^(?:' + NUMBER + r')$')
 LINE_RE = re.compile(r'^\s*((?:[A-Z]\.)?\d+(?:\.\d+)*|[一二三四五六七八九十百]+)(?:[\s、:：)）.．]+|(?=[\u4e00-\u9fff]))(.+?)\s*$')
 HEADERS_NO = ['大纲序号','序号','科目编号','项目编号','编号']
 HEADERS_NAME = ['科目名称','试验科目','试验项目','实验名称','项目名称','名称']
-CATALOG_HEADERS = ['大纲序号','科目名称','别名','示例标记']
+CATALOG_HEADERS = ['大纲序号','科目名称','别名','示例标记','来源页码','提取方式','核对提示']
 
 @dataclass(frozen=True)
 class OutlineEntry:
@@ -25,6 +25,9 @@ class OutlineEntry:
     name: str
     aliases: tuple = ()
     example: bool = False
+    source_page: int = 0
+    source_kind: str = ""
+    review_note: str = ""
 
 @dataclass
 class Match:
@@ -108,6 +111,9 @@ def entries_from_table(rows):
     name=next((headers.index(h) for h in HEADERS_NAME if h in headers),None)
     alias=headers.index('别名') if '别名' in headers else None
     example=headers.index('示例标记') if '示例标记' in headers else None
+    source_page=headers.index('来源页码') if '来源页码' in headers else None
+    source_kind=headers.index('提取方式') if '提取方式' in headers else None
+    review_note=headers.index('核对提示') if '核对提示' in headers else None
     start=1 if no is not None and name is not None else 0
     if not start:no,name=0,1
     result=[]
@@ -115,7 +121,9 @@ def entries_from_table(rows):
         get=lambda i:'' if i is None or i>=len(row) or row[i] is None else str(row[i]).strip()
         if not get(no) or not get(name):continue
         try:
-            result.append(make_entry(get(no),get(name),get(alias),get(example) in ['示例','是','1','true','TRUE']))
+            e=make_entry(get(no),get(name),get(alias),get(example) in ['示例','是','1','true','TRUE'])
+            page=int(get(source_page)) if get(source_page).isdigit() else 0
+            result.append(OutlineEntry(e.number,e.name,e.aliases,e.example,page,get(source_kind),get(review_note)))
         except ValueError:
             if start:raise
     return result
@@ -177,28 +185,8 @@ def read_source(path: Path, ocr_texts=None):
         entries+=entries_from_lines(lines)
         notes.append('Word自动列表编号可能未包含在文字中；请核对导入清单，缺号时另存为带可见编号的PDF或Excel。')
     elif ext=='.pdf':
-        import fitz
-        entries=[]
-        with fitz.open(path) as doc:
-            if doc.needs_pass:raise ValueError('大纲PDF已加密，请先解除密码。')
-            for i,page in enumerate(doc):
-                text=page.get_text(sort=True)
-                page_entries=entries_from_lines(text.splitlines())
-                if not page_entries and ocr_texts is not None:
-                    print(f'大纲第{i+1}/{len(doc)}页：尝试本地OCR读取目录…',flush=True)
-                    png=page.get_pixmap(matrix=fitz.Matrix(2.5,2.5),alpha=False).tobytes('png')
-                    pairs=ocr_texts(png)
-                    # OCR may return number and title as two adjacent text blocks.
-                    joined=[];j=0
-                    while j<len(pairs):
-                        piece=pairs[j][0]
-                        if NUMBER_RE.fullmatch(piece.strip().rstrip('.、')) and j+1<len(pairs):
-                            piece+=' '+pairs[j+1][0];j+=1
-                        joined.append(piece);j+=1
-                    page_entries=entries_from_lines(joined)
-                    notes.append(f'第{i+1}页使用OCR，必须核对序号和科目名称。')
-                entries+=page_entries
-        notes.append('PDF复杂表格或跨行目录可能漏项，请核对导入清单；必要时使用Excel/CSV。')
+        from full_outline_pdf import extract_full_pdf
+        return extract_full_pdf(path,ocr_texts)
     else:raise ValueError('支持CSV、XLSX、DOCX、PDF、TXT；旧版DOC/XLS请先另存为新格式。')
     entries=validate_entries(entries)
     return Catalog(entries,path,any(e.example for e in entries)),notes
@@ -208,7 +196,7 @@ def write_catalog(catalog,path):
     path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
     with path.open('w',encoding='utf-8-sig',newline='') as f:
         writer=csv.writer(f);writer.writerow(CATALOG_HEADERS)
-        for e in catalog.entries:writer.writerow([e.number,e.name,'；'.join(e.aliases),'示例' if e.example or catalog.example else ''])
+        for e in catalog.entries:writer.writerow([e.number,e.name,'；'.join(e.aliases),'示例' if e.example or catalog.example else '',e.source_page or '',e.source_kind,e.review_note])
 
 
 def add_outline(metas,catalog):
