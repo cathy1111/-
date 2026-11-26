@@ -21,7 +21,7 @@ import outline_catalog as outlines
 import vehicle_outlines as vehicle_catalogs
 
 _OCR = None
-PROGRAM_VERSION = "1.4.0"
+PROGRAM_VERSION = "1.5.0"
 
 TIME_RE = re.compile(
     r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*\D{0,4}日"
