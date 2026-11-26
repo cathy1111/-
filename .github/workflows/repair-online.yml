@@ -4,6 +4,9 @@ on:
     branches: [fix/offline-windows]
     paths: ['.github/workflows/repair-online.yml', 'packaging/common.iss']
   workflow_dispatch:
+concurrency:
+  group: trial-records-online-repair
+  cancel-in-progress: true
 permissions:
   contents: write
 jobs:
@@ -17,7 +20,44 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Download online installer and capture detailed installation log
+      - name: Compile corrected online bootstrapper
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force repair-dist | Out-Null
+          gh release download $env:RELEASE_TAG --pattern 'SHA256SUMS.txt' --dir repair-dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $line=Get-Content repair-dist/SHA256SUMS.txt | Where-Object { $_ -match 'TrialRecords-Offline-Setup-1.6.0.exe        shell: pwsh
+        run: |
+          $target=Join-Path $PWD 'online-install-test'
+          $log=Join-Path $PWD 'online-install.log'
+          $setup=Join-Path $PWD 'repair-dist\TrialRecords-Online-Setup-1.6.0.exe'
+          $p=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$target","/LOG=$log") -PassThru -Wait
+          Get-Content $log
+          if ($p.ExitCode -ne 0) { throw "Online installer failed with code $($p.ExitCode)" }
+          & "$target\runtime\python.exe" -c 'import sys,fitz,paddle,tkinter; tkinter.Tcl(); print(sys.executable); print("Online installed runtime OK")'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+ }
+          $hash=($line -split '\\s+')[0]
+          if ($hash -notmatch '^[a-f0-9]{64}        shell: pwsh
+        run: |
+          gh release download $env:RELEASE_TAG --pattern 'TrialRecords-Online-Setup-1.6.0.exe' --dir repair-dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $target=Join-Path $PWD 'online-install-test'
+          $log=Join-Path $PWD 'online-install.log'
+          $setup=Join-Path $PWD 'repair-dist\TrialRecords-Online-Setup-1.6.0.exe'
+          $p=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$target","/LOG=$log") -PassThru -Wait
+          Get-Content $log
+          if ($p.ExitCode -ne 0) { throw "Online installer failed with code $($p.ExitCode)" }
+          & "$target\runtime\python.exe" -c 'import sys,fitz,paddle,tkinter; tkinter.Tcl(); print(sys.executable); print("Online installed runtime OK")'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+) { throw 'Missing verified offline installer checksum' }
+          $url="https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/TrialRecords-Offline-Setup-1.6.0.exe"
+          $out=Join-Path $PWD 'repair-dist'
+          $compiler='C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe'
+          if (-not (Test-Path $compiler)) { choco install innosetup -y --no-progress }
+          & $compiler '/DAppVersion=1.6.0' "/DPortableURL=$url" "/DPortableSHA256=$hash" "/DOutputDir=$out" packaging/online.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify corrected installer and capture detailed installation log
         shell: pwsh
         run: |
           gh release download $env:RELEASE_TAG --pattern 'TrialRecords-Online-Setup-1.6.0.exe' --dir repair-dist
@@ -29,4 +69,16 @@ jobs:
           Get-Content $log
           if ($p.ExitCode -ne 0) { throw "Online installer failed with code $($p.ExitCode)" }
           & "$target\runtime\python.exe" -c 'import sys,fitz,paddle,tkinter; tkinter.Tcl(); print(sys.executable); print("Online installed runtime OK")'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish verified correction and promote release
+        shell: pwsh
+        run: |
+          $file='repair-dist/TrialRecords-Online-Setup-1.6.0.exe'
+          $hash=(Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sums=Get-Content repair-dist/SHA256SUMS.txt
+          $sums=$sums | ForEach-Object { if ($_ -match 'TrialRecords-Online-Setup-1.6.0.exe$') { "$hash  TrialRecords-Online-Setup-1.6.0.exe" } else { $_ } }
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'repair-dist/SHA256SUMS.txt'),($sums -join "`n")+"`n",[System.Text.Encoding]::ASCII)
+          gh release upload $env:RELEASE_TAG $file repair-dist/SHA256SUMS.txt --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit $env:RELEASE_TAG --prerelease=false --latest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
