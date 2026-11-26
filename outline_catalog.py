@@ -14,7 +14,11 @@ from xml.etree import ElementTree as ET
 
 NUMBER = r'(?:[A-Z]\.)?\d+(?:\.\d+)*|[一二三四五六七八九十百]+'
 NUMBER_RE = re.compile(r'^(?:' + NUMBER + r')$')
-LINE_RE = re.compile(r'^\s*((?:[A-Z]\.)?\d+(?:\.\d+)*|[一二三四五六七八九十百]+)(?:[\s、:：)）.．]+|(?=[\u4e00-\u9fff]))(.+?)\s*$')
+# Keep dotted hierarchy intact even when older PDF libraries insert spaces.
+NUMBER_PREFIX_RE = re.compile(r'^\s*((?:[A-Z][ \t]*\.[ \t]*)?\d+(?:[ \t]*\.[ \t]*\d+)*)',re.I)
+CHINESE_PREFIX_RE = re.compile(r'^\s*([一二三四五六七八九十百]+)')
+LEADER_RE = re.compile(r'(?:(?:[.．·_][ \t]*){2,}|(?:[…⋯][ \t]*)+)(?:\d[ \t]*)+$')
+LINE_RE = re.compile(r'^\s*((?:[A-Z][ \t]*\.[ \t]*)?\d+(?:[ \t]*\.[ \t]*\d+)*|[一二三四五六七八九十百]+)(?:[\s、:：)）.．]+|(?=[\u4e00-\u9fff]))(.+?)\s*$',re.I)
 HEADERS_NO = ['大纲序号','序号','科目编号','项目编号','编号']
 HEADERS_NAME = ['科目名称','试验科目','试验项目','实验名称','项目名称','名称']
 CATALOG_HEADERS = ['大纲序号','科目名称','别名','示例标记','来源页码','提取方式','核对提示']
@@ -68,7 +72,8 @@ class Catalog:
 
 
 def normalize_number(value):
-    value=unicodedata.normalize('NFKC',str(value)).strip().upper().rstrip('、.．')
+    value=unicodedata.normalize('NFKC',str(value)).strip().upper()
+    value=re.sub(r'[ \t]*\.[ \t]*','.',value).rstrip('、.．')
     if not NUMBER_RE.fullmatch(value):raise ValueError('无效大纲序号：'+value+'。请使用3.2.1、A.1等格式。')
     return value
 
@@ -85,7 +90,7 @@ def normalized_name(value):
 def clean_title(value):
     value=str(value).strip()
     # Dotted TOC leaders and their page numbers are layout, not subject names.
-    value=re.sub(r'[.．…⋯·_]{2,}\s*\d+\s*$','',value).strip()
+    value=LEADER_RE.sub('',value).strip()
     return value
 
 
@@ -129,14 +134,37 @@ def entries_from_table(rows):
     return result
 
 
+def number_token(value):
+    try:return normalize_number(value)
+    except ValueError:return ''
+
+
+def split_numbered_line(line):
+    text=unicodedata.normalize('NFKC',str(line)).strip()
+    # First take the complete maximal number token. Matching number + title in
+    # one regex can backtrack from 1.1 to 1 and turn '.1 title' into the title.
+    match=NUMBER_PREFIX_RE.match(text)
+    chinese=False
+    if not match:
+        match=CHINESE_PREFIX_RE.match(text);chinese=True
+    if not match:return None
+    rest=text[match.end():]
+    if not rest:return None
+    if chinese:
+        if not re.match(r'^[ \t、:：)）.．]',rest):return None
+    elif not re.match(r'^[ \t、:：)）.．\u4e00-\u9fff]',rest):return None
+    if re.match(r'^[ \t]*\.[ \t]*[.\d]',rest):return None
+    name=rest.lstrip(' \t、:：)）.．').strip()
+    if not name:return None
+    return normalize_number(match.group(1)),name
+
+
 def entries_from_lines(lines):
     result=[]
     for line in lines:
-        match=LINE_RE.match(unicodedata.normalize('NFKC',str(line)))
-        if match:
-            number,name=match.groups()
-            if re.fullmatch(r'[一二三四五六七八九十百]+',number) and not re.match(r'^[一二三四五六七八九十百]+[\s、:：)）.．]+',str(line)):continue
-            try:result.append(make_entry(number,name))
+        parsed=split_numbered_line(line)
+        if parsed:
+            try:result.append(make_entry(*parsed))
             except ValueError:pass
     return result
 
