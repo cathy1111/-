@@ -39,3 +39,7 @@
 ## 离线包缺少 httpx 等依赖时
 
 如果出现 `No matching distribution found for httpx`，说明本地 wheels 不完整。联网后运行 `soft/install_online.bat`，它使用本地 wheel，并从 PyPI 补全缺少的依赖。此入口不是完全离线安装；不会下载或更改你的 PDF。安装成功后再运行 `run_preview.bat`。
+
+## 车号显示未知时的增强版
+
+已改进车号标签定位、拆分文字框合并及局部放大复识别。[更新方法](VEHICLE_UPDATE.md)：已装好的电脑只替换 `split_experiments.py`，无需重装依赖。未知页面的局部图片和OCR日志保存在 `out/vehicle_debug`。规则和模拟OCR回归测试已通过；实际失败页面仍需样本验证。
