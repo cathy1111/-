@@ -3,8 +3,31 @@
   "rules": [
     {
       "experiment_contains": "A车",
-      "vehicle_aliases": {"204": "A204"},
-      "place_aliases": {"河眺宽万": "河北官厅"}
+      "vehicle_aliases": {
+        "204": "A204"
+      },
+      "place_aliases": {
+        "河眺宽万": "河北官厅"
+      },
+      "page_fingerprint": "8d1b44b09fa764b7eb8e5da680638af6177c047053657a15d1bb2944a0b9f490",
+      "confirmed_fields": {
+        "vehicle": "A204",
+        "place": "河北官厅"
+      }
+    },
+    {
+      "experiment_contains": "加速性能试验记录表",
+      "vehicle_aliases": {
+        "A04": "A204"
+      },
+      "place_aliases": {
+        "河眺宽万": "河北官厅"
+      },
+      "page_fingerprint": "d43148f41663dc5815c35a737dba40218c80cbcd13d675dc4a1fd4a84bd90078",
+      "confirmed_fields": {
+        "vehicle": "A204",
+        "place": "河北官厅"
+      }
     }
   ]
 }
