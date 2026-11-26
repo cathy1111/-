@@ -131,6 +131,7 @@ def prepare():
     package_files += [MANIFEST, ROOT / 'split_experiments.py', ROOT / 'run_preview.bat', ROOT / 'run_export.bat',
                       SOFT / 'install_offline.bat', SOFT / 'offline_bundle.py', SOFT / 'requirements-win.txt',
                       ROOT / 'OFFLINE_GUIDE.md']
+    package_files += [ROOT / 'outline_catalog.py', ROOT / 'import_outline.bat', ROOT / 'OUTLINE_GUIDE.md', ROOT / 'examples/sample_outline.csv']
     if (ROOT / 'field_rules.json').is_file():
         package_files.append(ROOT / 'field_rules.json')
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as z:
