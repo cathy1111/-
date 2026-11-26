@@ -132,6 +132,8 @@ def prepare():
                       SOFT / 'install_offline.bat', SOFT / 'offline_bundle.py', SOFT / 'requirements-win.txt',
                       ROOT / 'OFFLINE_GUIDE.md']
     package_files += [ROOT / 'outline_catalog.py', ROOT / 'import_outline.bat', ROOT / 'OUTLINE_GUIDE.md', ROOT / 'examples/sample_outline.csv']
+    package_files += [ROOT / 'vehicle_outlines.py', ROOT / 'full_outline_pdf.py', ROOT / 'demo_vehicle_data.py',
+                      ROOT / 'import_vehicle_outline.bat', ROOT / 'make_demo_data.bat', ROOT / 'MULTI_VEHICLE_GUIDE.md']
     if (ROOT / 'field_rules.json').is_file():
         package_files.append(ROOT / 'field_rules.json')
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as z:
