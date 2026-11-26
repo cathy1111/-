@@ -1,0 +1,10 @@
+{
+  "description": "仅用于用户已核对的误识别值；规则按表名范围生效，保留原始OCR字段与修正备注。",
+  "rules": [
+    {
+      "experiment_contains": "A车",
+      "vehicle_aliases": {"204": "A204"},
+      "place_aliases": {"河眺宽万": "河北官厅"}
+    }
+  ]
+}
