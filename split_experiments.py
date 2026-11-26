@@ -18,9 +18,10 @@ from typing import List, Optional, Tuple
 
 import fitz  # PyMuPDF
 import outline_catalog as outlines
+import vehicle_outlines as vehicle_catalogs
 
 _OCR = None
-PROGRAM_VERSION = "1.3.0"
+PROGRAM_VERSION = "1.4.0"
 
 TIME_RE = re.compile(
     r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*\D{0,4}日"
@@ -48,6 +49,8 @@ class PageMeta:
     outline_candidates: str = ""
     outline_active: bool = False
     outline_example: bool = False
+    outline_vehicle: str = ""
+    outline_source: str = ""
 
 
 def get_ocr():
@@ -132,7 +135,8 @@ def parse_vehicle_value(text: str) -> str:
     value = compact_text(text).strip(":：,，;；.。|[]()（）")
     value = value.replace("—", "-").replace("–", "-")
     # Preserve every recognized letter and digit; do not guess O/0, B/8 or E/F.
-    if re.fullmatch(r"(?:[A-Z]{1,3}-?)?\d{2,6}", value):
+    if re.fullmatch(r"[A-F]车",value):value=value[:-1]
+    if re.fullmatch(r"(?:[A-Z]{1,3}-?)?\d{2,6}|[A-F]", value):
         return value
     return ""
 
@@ -686,6 +690,9 @@ def refresh_filename(meta):
 
 
 def active_outline(explicit=None):
+    if not explicit:
+        bank=vehicle_catalogs.VehicleBank.load(Path(__file__).resolve().parent/'outlines')
+        if bank:return bank
     path=Path(explicit).expanduser().resolve() if explicit else Path(__file__).resolve().parent/'outline_catalog.csv'
     if not path.is_file():
         if explicit:raise ValueError('找不到大纲目录：'+str(path))
@@ -694,8 +701,18 @@ def active_outline(explicit=None):
 
 
 def attach_outline(metas,catalog):
+    if isinstance(catalog,vehicle_catalogs.VehicleBank):
+        vehicle_catalogs.apply_bank(metas,catalog)
+        for meta in metas:refresh_filename(meta)
+        print('已启用分车辆大纲库：'+', '.join(catalog.catalogs)+'；逐页按完整车号/字母类别选择，禁止跨车匹配。',flush=True)
+        pending=sum(not m.outline_no for m in metas)
+        if pending:print(f'{pending}页需核对车号或大纲序号，未套用其他车辆的大纲。',flush=True)
+        return
     outlines.add_outline(metas,catalog)
-    for meta in metas:refresh_filename(meta)
+    for meta in metas:
+        meta.outline_vehicle=''
+        meta.outline_source=catalog.path.name if catalog else ''
+        refresh_filename(meta)
     if catalog:
         print(f'已启用大纲：{catalog.path.name}，共{len(catalog.entries)}个目录条目。',flush=True)
         if catalog.example:print('注意：当前为示例大纲，输出文件名保留“示例”标记，不能作为正式编号。',flush=True)
@@ -706,6 +723,10 @@ def attach_outline(metas,catalog):
 
 def write_outline_identity(out_dir,catalog):
     import json
+    if isinstance(catalog,vehicle_catalogs.VehicleBank):
+        data={'active':True,'mode':'vehicle','root':str(catalog.path.resolve()),'catalogs':catalog.snapshot()}
+        (out_dir/'preview-outline.json').write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
+        return
     data={'active':bool(catalog)}
     if catalog:
         data.update({'path':str(catalog.path.resolve()),'sha256':catalog.sha256,'example':catalog.example,
@@ -720,6 +741,8 @@ def verify_outline_identity(out_dir,metas):
         if any(m.outline_active for m in metas):raise ValueError('缺少大纲校验记录，请用新版重新生成预览。')
         return
     data=json.loads(path.read_text(encoding='utf-8'))
+    if data.get('mode')=='vehicle':
+        return vehicle_catalogs.verify_bank(data,metas)
     if bool(data['active'])!=any(m.outline_active for m in metas):raise ValueError('清单的大纲模式被改变，请重新生成预览。')
     if not data['active']:return
     source=Path(data['path'])
@@ -753,6 +776,8 @@ def write_preview_csv(metas: List[PageMeta], csv_path: Path, version: str) -> No
                 "候选大纲科目",
                 "大纲模式",
                 "是否示例大纲",
+                "大纲车辆",
+                "大纲来源",
             ]
         )
         for m in metas:
@@ -776,6 +801,8 @@ def write_preview_csv(metas: List[PageMeta], csv_path: Path, version: str) -> No
                     m.outline_candidates,
                     "启用" if m.outline_active else "未启用",
                     "是" if m.outline_example else "否",
+                    m.outline_vehicle,
+                    m.outline_source,
                 ]
             )
     print(f"已写入预览: {csv_path}")
@@ -899,6 +926,8 @@ def load_preview_csv(csv_path: Path) -> List[PageMeta]:
                     outline_candidates=row.get("候选大纲科目", ""),
                     outline_active=outline_active,
                     outline_example=outline_example,
+                    outline_vehicle=row.get("大纲车辆", ""),
+                    outline_source=row.get("大纲来源", ""),
                 )
             )
     return metas
@@ -954,9 +983,18 @@ def cmd_split(args: argparse.Namespace) -> int:
         print(f"读取已核对预览 {preview_csv}；保留表格修改，不重新OCR。")
         metas = load_preview_csv(preview_csv)
         selected_outline=Path(args.outline).expanduser() if getattr(args,'outline',None) else Path(__file__).resolve().parent/'outline_catalog.csv'
-        if selected_outline.is_file() and not any(m.outline_active for m in metas):
+        current_bank=vehicle_catalogs.VehicleBank.load(Path(__file__).resolve().parent/'outlines') if not getattr(args,'outline',None) else None
+        if current_bank:
+            import json
+            identity_path=out_dir/'preview-outline.json'
+            if not identity_path.is_file() or json.loads(identity_path.read_text(encoding='utf-8')).get('mode')!='vehicle':
+                raise ValueError('已启用分车辆大纲库，请重新预览记录，不能继续使用旧的共用大纲清单。')
+        if (selected_outline.is_file() or current_bank) and not any(m.outline_active for m in metas):
             raise ValueError('已导入大纲，但当前清单尚未按大纲匹配。请先重新运行run_preview.bat，再核对导出。')
-        verify_outline_identity(out_dir,metas)
+        changed=verify_outline_identity(out_dir,metas)
+        if changed:
+            write_preview_csv(metas,preview_csv,version)
+            print('已按人工核对后的车号重新选择对应大纲，并更新清单。',flush=True)
         page_numbers=[m.page_index for m in metas]
         if not page_numbers or len(set(page_numbers))!=len(page_numbers) or any(i<0 or i>=count for i in page_numbers):
             raise ValueError("预览清单的页码重复、为空或超出原PDF范围，请检查清单。")
@@ -975,24 +1013,40 @@ def cmd_split(args: argparse.Namespace) -> int:
 
 
 def cmd_import_outline(args):
-    import json
     source=Path(args.input).expanduser().resolve()
     destination=Path(args.out).expanduser().resolve()
+    binding=vehicle_catalogs.vehicle_key(args.vehicle) if getattr(args,'vehicle',None) else ''
+    if binding:destination=destination/'outlines'
     destination.mkdir(parents=True,exist_ok=True)
     catalog,notes=outlines.read_source(source,ocr_texts)
-    target=destination/'outline_catalog.csv'
-    if target.exists():
-        # Keep the previous project's directory rather than silently losing it.
-        backup=destination/'outline_catalog.previous.csv'
-        backup.write_bytes(target.read_bytes())
+    stem='vehicle_'+binding if binding else 'outline_catalog'
+    review_rows=getattr(catalog,'review_rows',[])
+    if review_rows:
+        review_path=destination/(stem+'_extraction_review.csv')
+        with review_path.open('w',encoding='utf-8-sig',newline='') as f:
+            writer=csv.DictWriter(f,fieldnames=['大纲序号','科目名称','来源页码','提取方式','状态','核对提示'])
+            writer.writeheader();writer.writerows(review_rows)
+        print('完整大纲提取核对表：'+str(review_path),flush=True)
+    if not catalog.entries:raise ValueError('所有提取编号均存在冲突，未替换当前有效大纲。请核对提取核对表，整理成CSV后重新导入。')
+    target=destination/(stem+'.csv')
+    if target.exists():(destination/(stem+'.previous.csv')).write_bytes(target.read_bytes())
     outlines.write_catalog(catalog,target)
-    report=['来源：'+source.name,'导入条目：'+str(len(catalog.entries)),
-            '当前为示例目录，输出将带示例标记。' if catalog.example else '当前为导入的真实目录，请核对序号与科目名称。',
-            *notes,'请核对outline_catalog.csv，可在别名列添加记录表名称（多个名称用分号分隔）。',
-            '完成后关闭目录文件，再运行run_preview.bat并拖入原始记录PDF。']
-    (destination/'outline_import_report.txt').write_text('\n'.join(report),encoding='utf-8-sig')
+    report=['来源：'+source.name,'大纲车辆：'+(binding or '共用目录'),'导入条目：'+str(len(catalog.entries)),
+            '当前为示例目录，输出保留示例标记。' if catalog.example else '当前为真实目录，请核对序号与科目名称。',
+            *notes,'可在别名列添加记录表名称（多个名称用分号分隔）。',
+            '完成后保存关闭目录，运行run_preview.bat并拖入混合车辆原始记录PDF。']
+    (destination/(stem+'_import_report.txt')).write_text('\n'.join(report),encoding='utf-8-sig')
+    if not binding:
+        # Keep the v1.3 report filename for existing users.
+        (destination.parent/'outline_import_report.txt' if destination.name=='outlines' else destination/'outline_import_report.txt').write_text('\n'.join(report),encoding='utf-8-sig')
     print('\n'.join(report),flush=True)
     print('已保存：'+str(target),flush=True)
+    return 0
+
+
+def cmd_make_demo(args):
+    from demo_vehicle_data import generate_demo
+    generate_demo(Path(args.out).expanduser().resolve())
     return 0
 
 
@@ -1040,7 +1094,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp_outline=sub.add_parser("import-outline",help="导入真实或示例大纲，生成可编辑的目录清单")
     sp_outline.add_argument("--input","-i",required=True,help="大纲CSV/XLSX/DOCX/PDF/TXT")
     sp_outline.add_argument("--out","-o",default=str(Path(__file__).resolve().parent),help="目录清单保存位置")
+    sp_outline.add_argument("--vehicle",default=None,help="可选：A~F车辆类别或A204完整车号；不填时导入共用目录")
     sp_outline.set_defaults(func=cmd_import_outline)
+    sp_demo=sub.add_parser("make-demo",help="生成A~F车完整示例大纲及混合车辆扫描记录")
+    sp_demo.add_argument("--out",default=str(Path(__file__).resolve().parent/'examples'/'multi_vehicle'))
+    sp_demo.set_defaults(func=cmd_make_demo)
     return p
 
 
