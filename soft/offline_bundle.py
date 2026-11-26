@@ -131,6 +131,8 @@ def prepare():
     package_files += [MANIFEST, ROOT / 'split_experiments.py', ROOT / 'run_preview.bat', ROOT / 'run_export.bat',
                       SOFT / 'install_offline.bat', SOFT / 'offline_bundle.py', SOFT / 'requirements-win.txt',
                       ROOT / 'OFFLINE_GUIDE.md']
+    if (ROOT / 'field_rules.json').is_file():
+        package_files.append(ROOT / 'field_rules.json')
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as z:
         for p in sorted(set(package_files)):
             z.write(p, 'pro/' + p.relative_to(ROOT).as_posix())
