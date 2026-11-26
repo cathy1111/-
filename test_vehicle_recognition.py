@@ -44,14 +44,53 @@ class VehicleTests(unittest.TestCase):
             anchor=[B(20,100,70,120,'车号',.99)]
             first=[B(5,5,80,25,'E202',.9)]
             second=[B(5,5,80,25,'A204',.9)]
-            with patch.object(app,'ocr_boxes',side_effect=[anchor,first,first]):
+            with patch.object(app,'ocr_boxes',side_effect=[anchor,[],first,first]):
                 value,note=app.retry_vehicle(page,[],debug,0)
             self.assertEqual(value,'E202')
             self.assertTrue((debug/'page-0001-cell-0-contrast.png').exists())
-            with patch.object(app,'ocr_boxes',side_effect=[anchor,first,second]):
+            with patch.object(app,'ocr_boxes',side_effect=[anchor,[],first,second]):
                 value,note=app.retry_vehicle(page,[],debug,1)
             self.assertEqual(value,'')
             self.assertIn('冲突',note)
+
+    def test_footer_metadata_labels(self):
+        boxes=[B(10,1900,70,1920,'检查时间',.99),B(80,1900,160,1920,'20260723',.9),
+               B(200,1900,260,1920,'检查地点',.99),B(270,1900,350,1920,'河北官厅',.9),
+               B(390,1900,450,1920,'检查车辆',.99),B(460,1900,540,1920,'A204',.9)]
+        self.assertEqual(app.field_from_boxes(boxes,app.DATE_LABEL,app.normalized_date_value),'20260723')
+        self.assertEqual(app.field_from_boxes(boxes,app.PLACE_LABEL,app.parse_place_value),'河北官厅')
+        self.assertEqual(app.vehicle_from_boxes(boxes),'A204')
+        self.assertEqual(app.normalized_date_value('20260230'),'')
+    def test_footer_coordinates(self):
+        with fitz.open() as doc:
+            page=doc.new_page(width=600,height=800)
+            with patch.object(app,'ocr_boxes',return_value=[B(10,20,50,40,'检查车辆',.9)]):
+                boxes,png=app.ocr_footer(page,zoom=2.5)
+            self.assertEqual(boxes[0].y0,1520)
+            self.assertTrue(png.startswith(b'\x89PNG'))
+    def test_annex_scan_metadata_from_footer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);pdf=root/'annex.pdf'
+            with fitz.open() as doc:doc.new_page();doc.save(pdf)
+            header=[B(10,30,300,50,'A车2.0阶段质量质心测量配重明细表',.99)]
+            footer=[B(10,1900,70,1920,'检查时间20260723',.9),B(200,1900,350,1920,'检查地点河北官厅',.9),B(390,1900,540,1920,'检查车辆A204',.9)]
+            with patch.object(app,'ocr_boxes',side_effect=[header,footer]):
+                rows=app.scan_pdf(pdf,debug_dir=root/'debug')
+            self.assertEqual((rows[0].vehicle,rows[0].time_code,rows[0].location_raw),('A204','20260723','河北官厅'))
+            self.assertNotIn('时间未识别',rows[0].note)
+
+    def test_recognition_only_handwriting(self):
+        from unittest.mock import Mock
+        from PIL import Image
+        from io import BytesIO
+        image=BytesIO();Image.new('RGB',(180,50),'white').save(image,format='PNG')
+        engine=Mock();engine.ocr.return_value=[[('A204',.95)]]
+        with patch.object(app,'get_ocr',return_value=engine):
+            self.assertEqual(app.recognize_single_cell(image.getvalue()),'A204')
+        self.assertFalse(engine.ocr.call_args.kwargs['det'])
+        engine.ocr.return_value=[[('A2O4',.99)]]
+        with patch.object(app,'get_ocr',return_value=engine):
+            self.assertEqual(app.recognize_single_cell(image.getvalue()),'')
 
     def test_scan_integration(self):
         with tempfile.TemporaryDirectory() as tmp:
