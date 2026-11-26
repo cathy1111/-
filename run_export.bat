@@ -4,13 +4,14 @@ cd /d "%~dp0"
 call :find_python
 if not defined TASK_PY goto missing_python
 if not exist "split_experiments.py" goto missing_script
-echo Drag one PDF file into this window, then press Enter.
+echo Export from the reviewed preview.csv; OCR will not overwrite your edits.
+echo Drag the SAME original PDF used for preview, then press Enter.
 set "TASK_PDF="
 set /p "TASK_PDF=PDF path: "
 set "TASK_PDF=%TASK_PDF:"=%"
 if not defined TASK_PDF goto no_file
 if not exist "%TASK_PDF%" goto no_file
-"%TASK_PY%" split_experiments.py split --input "%TASK_PDF%" --out "%~dp0out" --version V011 --top-ratio 0.4 --rescan
+"%TASK_PY%" split_experiments.py split --input "%TASK_PDF%" --out "%~dp0out" --version V011 --top-ratio 0.4
 if errorlevel 1 goto failed
 echo DONE. Open the out folder for results.
 pause
