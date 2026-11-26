@@ -4,7 +4,7 @@
 
 1. 下载本分支ZIP，解压。
 2. 备份原来的 `C:\pro\split_experiments.py`。
-3. 只将下载包里的 `split_experiments.py` 复制到 `C:\pro` 并替换同名文件。不要替换正在正常使用的模型或Python环境。
+3. 将 `split_experiments.py`、`run_export.bat` 和 `field_rules.json` 复制到 `C:\pro`，替换同名文件（field_rules.json为新增）。不要替换正在正常使用的模型或Python环境。
 4. 关闭 Excel 中打开的 preview.csv，再运行 `C:\pro\run_preview.bat`，拖入原PDF并回车。
 5. 查看新生成的 out/preview.csv，检查车号与备注。
 
@@ -19,3 +19,7 @@
 若车号依然未知，请提供对应原页或车号局部截图，也可发对应 page-XXXX-ocr.json 和局部图片，便于判断是裁剪、文字检测还是手写识别的问题。请按公司要求处理敏感资料。
 
 验证：已通过标签、文字块拆分、坐标邻近、边界排除、候选冲突、复识别调用与诊断文件等测试，以及原有回归测试。已查看用户提供的两页原始图像：第一页车号A204位于上部车号栏；第二页车号A204、日期和地点位于底部检查信息栏。已覆盖这两种布局与日期格式的模拟OCR测试，但当前环境没有PaddleOCR模型，尚未实测这两页的实际自动识别精度；不能把规则测试当作真实识别成功。
+
+## 核对后导出
+
+运行预览后可修改CSV的车号和试验地点，保存关闭，再使用新版run_export.bat拖入同一份原PDF。新版默认不重新OCR，详见[核对导出说明](REVIEW_EXPORT.md)。
