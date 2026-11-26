@@ -27,7 +27,7 @@ call :find_python
 if defined TASK_PY goto python_ready
 if not exist "%TASK_SOFT%python\python-3.9.13-amd64.exe" goto missing
 echo Complete the Python installation wizard, then return to this window.
-start /wait "" "%TASK_SOFT%python\python-3.9.13-amd64.exe" InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_test=0
+start /wait "" "%TASK_SOFT%python\python-3.9.13-amd64.exe" InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_tcltk=1 Include_test=0
 call :find_python
 if not defined TASK_PY goto no_python
 :python_ready
@@ -52,7 +52,7 @@ call :check_model ch_ppocr_mobile_v2.0_cls_infer cls\ch_ppocr_mobile_v2.0_cls_in
 if errorlevel 1 goto model_missing
 
 echo [5/5] Checking Python imports...
-"%TASK_PY%" -c "import fitz, paddle; from paddleocr import PaddleOCR; print('Dependency imports OK')"
+"%TASK_PY%" -c "import fitz, paddle, tkinter; tkinter.Tcl(); from paddleocr import PaddleOCR; print('Dependency imports OK')"
 if errorlevel 1 goto failed
 echo.
 echo SUCCESS: dependency installation and model-file checks passed.
