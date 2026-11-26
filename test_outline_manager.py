@@ -81,7 +81,7 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(),original)
     def test_worker_uses_console_interpreter_for_captured_output(self):
         self.assertEqual(Path(backend.worker_interpreter('/tmp/pythonw.exe')).name,'python.exe')
-        self.assertEqual(backend.worker_interpreter('/tmp/python.exe'),'/tmp/python.exe')
+        self.assertEqual(Path(backend.worker_interpreter('/tmp/python.exe')),Path('/tmp/python.exe'))
 
     def test_windows_launchers_keep_ascii_crlf(self):
         root=Path(__file__).parent
