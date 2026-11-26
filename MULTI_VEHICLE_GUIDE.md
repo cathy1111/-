@@ -1,10 +1,12 @@
+> v1.5已提供更简单的中文窗口：双击 **打开大纲管理.bat**，一次选择多份文件批量导入。详见[窗口操作说明](OUTLINE_MANAGER_GUIDE.md)。以下命令行方式作为备用。
+
 # v1.4：完整PDF大纲整理 + A～F分车辆统一命名
 
 ## 更新
 
 下载本分支ZIP，解压后将全部更新文件合并到原 **C:\pro**，替换同名文件，保留原soft中的模型、Python和依赖。不需要重装已有环境。
 
-不能只替换主程序；本次新增 **vehicle_outlines.py、full_outline_pdf.py、demo_vehicle_data.py、import_vehicle_outline.bat、make_demo_data.bat** 等文件，须一起复制。窗口版本为 **v1.4.0**。
+不能只替换主程序；本次新增 **vehicle_outlines.py、full_outline_pdf.py、demo_vehicle_data.py、import_vehicle_outline_cli.bat、make_demo_data.bat** 等文件，须一起复制。窗口版本为 **v1.4.0**。
 
 ## 没有真实文件，先一键生成六车测试资料
 
@@ -12,7 +14,7 @@
 2. 软件在 **examples\multi_vehicle** 下生成：
    - full_outlines\A_outline.pdf ～ F_outline.pdf：六份带封面、目录和正文的完整示例大纲。
    - mixed_vehicle_records_scan.pdf：一份六页混合车辆扫描记录，每页分别为A204、B101、C301、D401、E202、F601。
-3. 双击 **import_vehicle_outline.bat**，输入A，拖入A_outline.pdf并回车；按相同步骤依次导入B～F车。
+3. 双击 **import_vehicle_outline_cli.bat**，输入A，拖入A_outline.pdf并回车；按相同步骤依次导入B～F车。
 4. 每车生成的目录在 **outlines\vehicle_A.csv** 等文件中，可打开核对；提取核对表同时显示来源页码和提取方式。
 5. 运行 **run_preview.bat**，拖入 mixed_vehicle_records_scan.pdf，查看清单。
 6. 核对后运行 **run_export.bat**，拖入同一PDF导出。
@@ -23,7 +25,7 @@
 
 ## 后续使用真实大纲
 
-1. 运行 **import_vehicle_outline.bat**，输入车辆类别A，再拖入A车真实完整大纲PDF。
+1. 运行 **import_vehicle_outline_cli.bat**，输入车辆类别A，再拖入A车真实完整大纲PDF。
 2. 以同样方式分别导入B、C、D、E、F。软件会自动整理成各车独立CSV；原始记录表不用添加序号。
 3. 同一车重新导入会备份其上一份CSV，不影响其他车。
 4. 核对并保存关闭各车目录后，运行 **run_preview.bat**，一次拖入含多个车辆的原始扫描PDF。
