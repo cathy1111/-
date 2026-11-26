@@ -102,5 +102,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:TRIAL_RELEASE_TAG dist/TrialRecords-Portable-Windows-x64.zip dist/TrialRecords-Offline-Setup-1.6.0.exe dist/TrialRecords-Online-Setup-1.6.0.exe dist/SHA256SUMS.txt --target '${{ github.sha }}' --title 'TrialRecords 1.6.0 - Windows x64' --notes-file packaging/RELEASE_NOTES.md
+          gh release create $env:TRIAL_RELEASE_TAG dist/TrialRecords-Portable-Windows-x64.zip dist/TrialRecords-Offline-Setup-1.6.0.exe dist/TrialRecords-Online-Setup-1.6.0.exe dist/SHA256SUMS.txt --target '${{ github.sha }}' --prerelease --title 'TrialRecords 1.6.0 - Windows x64' --notes-file packaging/RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify online installer download and deployment
+        shell: pwsh
+        run: |
+          $target=Join-Path $PWD 'online-installed-test'
+          $setup=Join-Path $PWD 'dist\TrialRecords-Online-Setup-1.6.0.exe'
+          $p=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$target") -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw 'Online installer failed; keep release marked prerelease' }
+          & "$target\runtime\python.exe" -c 'import sys,fitz,paddle,tkinter; tkinter.Tcl(); print(sys.executable); print("Online installed runtime OK")'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Mark verified packages ready
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit $env:TRIAL_RELEASE_TAG --prerelease=false --latest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
