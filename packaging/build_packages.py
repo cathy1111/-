@@ -113,8 +113,9 @@ def package(payload,repo,tag):
     compiler=Path('C:/Program Files (x86)/Inno Setup 6/ISCC.exe')
     if not compiler.is_file():raise ValueError('Install Inno Setup 6 on the Windows build machine')
     run([compiler,'/DAppVersion='+VERSION,'/DPayloadDir='+str(payload),'/DOutputDir='+str(dist),str(ROOT/'packaging/offline.iss')])
-    url='https://github.com/'+repo+'/releases/download/'+tag+'/'+portable.name
-    run([compiler,'/DAppVersion='+VERSION,'/DPortableURL='+url,'/DPortableSHA256='+digest,'/DOutputDir='+str(dist),str(ROOT/'packaging/online.iss')])
+    offline=dist/f'TrialRecords-Offline-Setup-{VERSION}.exe'
+    url='https://github.com/'+repo+'/releases/download/'+tag+'/'+offline.name
+    run([compiler,'/DAppVersion='+VERSION,'/DPortableURL='+url,'/DPortableSHA256='+sha256(offline),'/DOutputDir='+str(dist),str(ROOT/'packaging/online.iss')])
     files=[portable,dist/f'TrialRecords-Offline-Setup-{VERSION}.exe',dist/f'TrialRecords-Online-Setup-{VERSION}.exe']
     (dist/'SHA256SUMS.txt').write_text('\n'.join(sha256(p)+'  '+p.name for p in files)+'\n',encoding='ascii')
     print('Built all three delivery packages:',*[str(p) for p in files],sep='\n',flush=True)
