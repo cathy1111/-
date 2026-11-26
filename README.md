@@ -1,57 +1,43 @@
-# 实验记录 PDF 重命名工具
+# 试验记录 PDF 智能归档工具 v1.3
 
-## 软件 v1.2.0：本次下载的是修改后的程序
+本地OCR提取试验记录，支持导入试验大纲，在文件名前增加对应科目序号。
 
-已安装用户请备份并替换 `split_experiments.py`、`run_export.bat`、`field_rules.json`，不要重装或删除模型。先运行预览核对，再运行导出。[更新步骤及验证范围](SOFTWARE_UPDATE.md)。
+## 下载与更新
 
-新版拒绝把温度单位当地点，按标签位置读日期/地点，支持局部重试；已核对页面的A204/河北官厅修正仅在完整页面指纹一致时生效，不会固定套用到其他同名表格。通用手写识别仍可能需要核对。
+[下载软件更新ZIP](https://github.com/cathy1111/-/archive/refs/heads/fix/offline-windows.zip)
 
-## 最新更新：已确认误识别校正与核对后导出
+已安装用户：解压后将更新文件合并到原 **C:\pro**，替换同名文件，**保留原soft中的模型、Python和依赖**。本次新增 `outline_catalog.py`、`import_outline.bat`、`examples` 文件夹，不能仅替换主程序。已安装环境无需重装。
 
-已安装用户只需更新 `split_experiments.py`、`run_export.bat` 和新增的 `field_rules.json`，无需重装依赖。先运行预览，再核对CSV，最后用同一份原PDF导出；新版导出不会重新OCR覆盖表格修改。
+本仓库是软件源码和补丁，不包含大型OCR模型及Python安装包；继续使用原pro完整包中的这些内容。新电脑离线安装见[离线说明](OFFLINE_GUIDE.md)。
 
-本次用户确认的“A车”表名范围内，完整误识别值 `204`、`河眺宽万` 可按规则校正为 `A204`、`河北官厅`。原始OCR值和修正备注保留在清单中。这是已确认业务规则校正，不代表模型已正确识别所有手写文字。[详细更新和使用说明](REVIEW_EXPORT.md)。
+## 使用：导入大纲 → 预览记录 → 导出
 
-本仓库提供现有 `pro` 程序的修复补丁。**不是完整离线安装包**，不包含原来的 Python 安装包、OCR 模型和离线依赖。
+1. 运行 **import_outline.bat**，拖入真实大纲（CSV/XLSX/DOCX/PDF/TXT）。导入后核对程序目录中的 `outline_catalog.csv`，保存关闭。
+2. 运行 **run_preview.bat**，拖入原始记录PDF。查看 `out/preview.csv` 中的车号、日期、地点、大纲序号与匹配状态。
+3. 核对修改清单并保存关闭后，运行 **run_export.bat**，拖入同一份原PDF，生成命名后的单页PDF。
 
-## 新增：公司电脑完全离线安装
+真实大纲中该科目编号为3.2.1时，命名示例：
 
-**先在联网电脑准备一次，公司电脑无需联网。**
+`3.2.1-加速性能试验记录表-A204-20260723-河北官厅-V011.pdf`
 
-1. 下载此修复分支的 ZIP，将文件合并到已运行成功的 `C:\pro`，保留原模型和安装包。
-2. 在联网 Windows 电脑上运行 `soft/prepare_online.bat`，等待检查成功并生成 `offline-package.zip`。
-3. 将该 ZIP 复制到公司电脑，解压成 `C:\pro`，运行 `soft/install_offline.bat`。
-4. 安装成功后运行 `run_preview.bat` 或 `run_export.bat`。
+序号来自你导入的大纲，不来自原始记录表。没有导入大纲时，沿用原来的无序号命名。
 
-[完整离线操作说明](OFFLINE_GUIDE.md)。GitHub 源码 ZIP 本身不含模型、Python 安装包和完整依赖，不能直接当作完整离线包。准备程序会在干净环境中验证禁止软件源访问的安装及本地模型初始化，成功后才打包。这里尚未实际生成大容量离线包，需在你的联网 Windows 电脑上运行验证。
+## 先试软件附带的示例目录
 
-## 下载修复版
+大纲文件使用 `examples/sample_outline.csv`，导入方式与真实文件相同。其序号是演示生成的，不代表正式大纲，输出带 **示例-** 标记。后续重新导入真实大纲即可切换，不需要改代码。
 
-- [打开修复版文件](https://github.com/cathy1111/-/tree/fix/offline-windows)
-- [下载修复版 ZIP](https://github.com/cathy1111/-/archive/refs/heads/fix/offline-windows.zip)
+[大纲功能详细说明](OUTLINE_GUIDE.md)
 
-下载后解压，把里面的文件复制到原来的 `pro` 文件夹，合并文件夹并替换同名文件。请先备份旧代码，**不要删除原有 soft 文件夹里的模型和安装包**。
+## 匹配与核对原则
 
-## 使用
+- 优先完整名称及别名，其次要求规范化名称唯一匹配。
+- 相似名称只提供候选建议，不自动猜序号；多项匹配或缺项输出“待匹配-”前缀。
+- 同一科目不同表头可添加到目录的别名列；也可在预览清单中核对填写当前大纲已有的编号。
+- 更换大纲或原PDF后必须重新预览，导出会核验对应关系，不重新OCR覆盖表格修改。
+- 原有车号、日期、地点定位及已确认页面规则保持；不是把所有表格固定成同一车号或地点。
 
-1. 完整离线包请运行 `soft/install_offline.bat`；尚未准备离线包的联网电脑可使用 `soft/install_online.bat`。出现 **SUCCESS** 后再继续。
-2. 双击 `run_preview.bat`，把一个 PDF 拖入黑色窗口，按回车，查看 `out/preview.csv`。
-3. 双击 `run_export.bat`，拖入 PDF，按回车，生成单页 PDF。
+## 离线与验证
 
-输出格式：`实验名称-车号-日期-地点-V011.pdf`。日期取实际识别值；V011 是归档版本设置，不是识别结果。无法读取的字段标为未知。
+普通兼容Windows电脑即可使用，不需要大型服务器、API密钥或联网识别。核心新增功能不额外安装依赖；XLSX读取使用原依赖中的openpyxl，缺少时可另存为CSV。
 
-必须保留原包中的 `soft/python`、`soft/vcredist`、`soft/wheels`、`soft/paddleocr_models`。运行环境为 Windows 64 位、Python 3.9，使用本地 PaddleOCR，默认 CPU，不需要 API 密钥。
-
-## 修复范围与验证
-
-修复安装脚本的编码与换行、解释器版本选择、安装失败误报；明确使用本地模型；识别范围扩大到页面顶部 40%；默认逐页导出，避免不同实验误合并；不覆盖已有 PDF。
-
-已完成 Python 语法、日期/版本校验、分页导出、重名保护、批处理 ASCII/CRLF 检查。**尚未在 Windows 实测安装流程，也未验证真实手写识别准确率。**手写文字仍可能误读，重要记录请核对。
-
-## 离线包缺少 httpx 等依赖时
-
-如果出现 `No matching distribution found for httpx`，说明本地 wheels 不完整。联网后运行 `soft/install_online.bat`，它使用本地 wheel，并从 PyPI 补全缺少的依赖。此入口不是完全离线安装；不会下载或更改你的 PDF。安装成功后再运行 `run_preview.bat`。
-
-## 车号显示未知时的增强版
-
-已改进车号标签定位、拆分文字框合并及局部放大复识别。[更新方法](VEHICLE_UPDATE.md)：已装好的电脑只替换 `split_experiments.py`，无需重装依赖。未知页面的局部图片和OCR日志保存在 `out/vehicle_debug`。规则和模拟OCR回归测试已通过；实际失败页面仍需样本验证。
+已通过35项检查，包括CSV/XLSX/DOCX/文本PDF解析、匹配、歧义拒绝、示例保护、带编号清单和PDF导出、数据对应关系及既有功能回归。扫描目录OCR使用模拟结果验证接口；尚未在用户Windows上实测真实大纲，复杂版式和手写内容需核对。
