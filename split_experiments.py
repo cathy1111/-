@@ -110,8 +110,8 @@ class OCRBox:
     confidence: float
 
 
-VEHICLE_LABEL = re.compile(r"试验车号|车辆编号|试验车编号|车号")
-OTHER_FIELD = re.compile(r"里程|燃油|油量|摩托|负载|气象|天气|温度|湿度|风力|海拔|序号|仪器|有效期|试验时间|试验地点|车型|产品型号")
+VEHICLE_LABEL = re.compile(r"试验车号|车辆编号|试验车编号|车号|检查车辆|检查车号")
+OTHER_FIELD = re.compile(r"里程|燃油|油量|摩托|负载|气象|天气|温度|湿度|风力|海拔|序号|仪器|有效期|试验时间|试验地点|检查时间|检查日期|检查地点|检查车辆|检查车号|车型|产品型号")
 
 
 def compact_text(text: str) -> str:
@@ -223,6 +223,24 @@ def ocr_boxes(png_bytes: bytes) -> List[OCRBox]:
     return boxes
 
 
+def recognize_single_cell(png_bytes: bytes) -> str:
+    """Recognition-only retry when handwriting was missed by text detection."""
+    import numpy as np
+    from io import BytesIO
+    from PIL import Image
+    result = get_ocr().ocr(np.array(Image.open(BytesIO(png_bytes)).convert("RGB")),det=False,cls=True)
+    candidates=set()
+    def collect(item):
+        if isinstance(item,(list,tuple)):
+            if len(item)==2 and isinstance(item[0],str) and isinstance(item[1],(int,float)):
+                value=parse_vehicle_value(item[0])
+                if value and item[1]>=.6:candidates.add(value)
+            else:
+                for child in item:collect(child)
+    collect(result)
+    return next(iter(candidates)) if len(candidates)==1 else ""
+
+
 def retry_vehicle(page: fitz.Page, initial: List[OCRBox], debug_dir: Optional[Path], page_index: int) -> Tuple[str, str]:
     import json
     from io import BytesIO
@@ -238,6 +256,9 @@ def retry_vehicle(page: fitz.Page, initial: List[OCRBox], debug_dir: Optional[Pa
     png = render_top_crop(page, top_ratio=0.60, zoom=zoom)
     boxes = ocr_boxes(png)
     remember("expanded",png,boxes)
+    footer,footer_png=ocr_footer(page,zoom=zoom)
+    remember("footer",footer_png,footer)
+    boxes += footer
     value = vehicle_from_boxes(boxes)
     if value:
         return value, "车号经扩大区域复识别"
@@ -266,17 +287,78 @@ def retry_vehicle(page: fitz.Page, initial: List[OCRBox], debug_dir: Optional[Pa
             local=ocr_boxes(crop)
             remember(f"cell-{index}-{variant}",crop,local)
             # Only accept one physical text row inside this bounded cell.
+            value=""
             if local:
                 heights=[max(b.y1-b.y0,1) for b in local]
                 if max(b.y0 for b in local)-min(b.y0 for b in local) <= max(heights)*.9:
                     value=parse_vehicle_value("".join(b.text for b in sorted(local,key=lambda b:b.x0)))
                     if value:
                         candidates.add(value)
+            if not value:
+                value=recognize_single_cell(crop)
+                trace.append({"pass":f"cell-{index}-{variant}-recognition-only","vehicle":value})
+                if value:candidates.add(value)
     if debug_dir is not None:
         (debug_dir/f"page-{page_index+1:04d}-ocr.json").write_text(json.dumps(trace,ensure_ascii=False,indent=2),encoding="utf-8")
     if len(candidates)==1:
         return next(iter(candidates)), "车号经单元格放大复识别"
     return "", "车号复识别未确定" + ("（候选冲突）" if len(candidates)>1 else "")
+
+
+DATE_LABEL = re.compile(r"试验时间|试验日期|测试日期|检查时间|检查日期")
+PLACE_LABEL = re.compile(r"试验地点|测试地点|检查地点")
+ALL_FIELD_LABELS = re.compile(r"试验车号|车辆编号|试验车编号|车号|检查车辆|检查车号|试验时间|试验日期|测试日期|检查时间|检查日期|试验地点|测试地点|检查地点|里程|燃油|油量|摩托|负载|气象|天气|温度|湿度|风力|海拔|序号|仪器|有效期|车型|产品型号")
+
+
+def normalized_date_value(text: str) -> str:
+    text = compact_text(text).strip(":：,，;；.。|[]()（）")
+    match = re.fullmatch(r"(20\d{2})(\d{2})(\d{2})", text)
+    if not match:
+        match = re.fullmatch(r"(20\d{2})[年/.-](\d{1,2})[月/.-](\d{1,2})日?", text)
+    return format_time_code(*match.groups()) if match else ""
+
+
+def field_from_boxes(boxes, label_pattern, parse):
+    values = set()
+    for anchor in boxes:
+        match = label_pattern.search(compact_text(anchor.text))
+        if not match:
+            continue
+        tail = compact_text(anchor.text)[match.end():]
+        tail = ALL_FIELD_LABELS.split(tail,maxsplit=1)[0]
+        direct = parse(tail)
+        if direct:
+            values.add(direct)
+            continue
+        height = max(anchor.y1-anchor.y0,1)
+        center = (anchor.y0+anchor.y1)/2
+        nearby = [b for b in boxes if b is not anchor and b.x0>=anchor.x1-height*.2 and b.x0-anchor.x1<=height*22
+                  and abs((b.y0+b.y1)/2-center)<=max(height,b.y1-b.y0)*1.1]
+        nearby.sort(key=lambda b:b.x0)
+        parts=[]
+        for box in nearby:
+            text=compact_text(box.text)
+            if ALL_FIELD_LABELS.search(text):break
+            if parts and box.x0-parts[-1].x1>height*2.5:break
+            parts.append(box)
+        value=parse("".join(b.text for b in parts))
+        if value:values.add(value)
+    return next(iter(values)) if len(values)==1 else ""
+
+
+def parse_place_value(text):
+    text=compact_text(text).strip(":：,，;；.。|[]()（）")
+    return text if re.fullmatch(r"[\u4e00-\u9fffA-Z0-9·.、-]{2,25}",text) and re.search(r"[\u4e00-\u9fffA-Z]",text) else ""
+
+
+def ocr_footer(page, zoom=2.5):
+    # These forms put check date/place/vehicle in a row close to the bottom edge.
+    r=page.rect
+    rect=fitz.Rect(r.x0,r.y0+r.height*.75,r.x1,r.y1)
+    png=page.get_pixmap(matrix=fitz.Matrix(zoom,zoom),clip=rect,alpha=False).tobytes("png")
+    boxes=ocr_boxes(png)
+    # Normalize crop coordinates back into full-page coordinates at the same zoom.
+    return [OCRBox(b.x0+rect.x0*zoom,b.y0+rect.y0*zoom,b.x1+rect.x0*zoom,b.y1+rect.y0*zoom,b.text,b.confidence) for b in boxes],png
 
 
 def ocr_texts(png_bytes: bytes) -> List[Tuple[str, float]]:
@@ -395,12 +477,34 @@ def scan_pdf(
         boxes = ocr_boxes(png)
         texts = [(b.text,b.confidence) for b in boxes]
         experiment, _, time_disp, time_code, loc_s, note = extract_fields(texts)
+        # Use labelled metadata from both regions. An annex may carry all of its
+        # date/place/vehicle fields at the bottom instead of in the header.
+        parsed_date = field_from_boxes(boxes, DATE_LABEL, normalized_date_value)
+        parsed_place = field_from_boxes(boxes, PLACE_LABEL, parse_place_value)
         vehicle = vehicle_from_boxes(boxes)
+        if not all([vehicle, parsed_date or time_code, parsed_place or loc_s]):
+            footer, footer_png = ocr_footer(page)
+            boxes += footer
+            if debug_dir is not None:
+                debug_dir.mkdir(parents=True,exist_ok=True)
+                (debug_dir/f"page-{i+1:04d}-footer.png").write_bytes(footer_png)
+            parsed_date = field_from_boxes(boxes, DATE_LABEL, normalized_date_value)
+            parsed_place = field_from_boxes(boxes, PLACE_LABEL, parse_place_value)
+            vehicle = vehicle_from_boxes(boxes)
+        if parsed_date:
+            time_code=parsed_date
+            time_disp=display_time(parsed_date[:4],parsed_date[4:6],parsed_date[6:8])
+        if parsed_place:
+            loc_s=parsed_place
         vehicle_note = ""
         if not vehicle:
             print(f"  第{i+1}页车号未确定，正在放大复识别…",flush=True)
             vehicle, vehicle_note = retry_vehicle(page, boxes, debug_dir, i)
-        notes = [part for part in note.split(";") if part and part != "车号未识别"]
+        notes = [part for part in note.split(";") if part and part not in {"车号未识别", "时间未识别", "地点未识别"}]
+        if not time_code:
+            notes.append("时间未识别")
+        if not loc_s:
+            notes.append("地点未识别")
         if not vehicle:
             notes.append("车号未识别")
         if vehicle_note:
