@@ -27,8 +27,9 @@ pro/
 5. 安装成功后，回到 pro 文件夹双击 run_preview.bat。
    从资源管理器拖入一个PDF到黑色窗口，按回车。识别结果在 out/preview.csv。
 6. 要导出PDF，双击 run_export.bat，同样拖入PDF并回车。
-   该入口会重新识别原PDF，不复用可能属于其他PDF的旧preview.csv。
+   新版入口使用当前preview.csv中的核对结果，不重新OCR；通过preview-source.json校验必须为同一原PDF。
    PDF输出到 out 文件夹。默认每页单独导出，版本V011。
+   新版需额外复制field_rules.json，保留已确认的误识别纠正规则；先运行新版预览以生成原PDF校验信息。
    多次导出不会覆盖已有PDF，重名文件增加_2、_3等后缀。
 
 提示：
