@@ -28,3 +28,10 @@ offline-package.zip
 /examples/multi_vehicle/
 /outline_catalog_extraction_review.csv
 /outline_catalog_import_report.txt
+
+# Local outline-manager state and diagnostics
+/logs/
+/outline_manager_state.json
+/outline_manager_state.json.tmp
+/.outline_manager.lock
+*.writing.tmp
