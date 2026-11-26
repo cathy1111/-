@@ -17,3 +17,8 @@ soft/wheelhouse/
 soft/offline-manifest.json
 soft/requirements-lock.txt
 offline-package.zip
+
+# Imported real outline data stays on the user's PC
+/outline_catalog.csv
+/outline_catalog.previous.csv
+/outline_import_report.txt
