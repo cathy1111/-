@@ -121,6 +121,13 @@ class MultiVehicleTests(unittest.TestCase):
             self.assertTrue(vc.verify_bank(data,[unknown]))
             self.assertEqual(unknown.outline_vehicle,'A');self.assertEqual(unknown.outline_no,'1.3')
 
+    def test_letter_only_vehicle_numbers_are_supported_in_labelled_cells(self):
+        for vehicle in 'ABCDEF':
+            self.assertEqual(app.labelled_vehicle('车号：'+vehicle),vehicle)
+            self.assertEqual(app.labelled_vehicle('检查车辆：'+vehicle+'车'),vehicle)
+        self.assertEqual(app.labelled_vehicle('车号：A204'),'A204')
+        self.assertEqual(app.parse_place_value('C'),'')
+
     def test_windows_entrypoints(self):
         root=Path(__file__).parent
         for name in ['import_vehicle_outline.bat','make_demo_data.bat']:
