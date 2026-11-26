@@ -10,7 +10,7 @@ from pathlib import Path
 from outline_manager_backend import StateStore,InstanceLock,guess_vehicle,prepare_jobs,run_imports,existing_catalog_status
 
 ROOT=Path(__file__).resolve().parent
-TITLE='试验大纲管理 v1.5.1'
+TITLE='试验大纲管理 v1.6'
 try:
     import tkinter as tk
     from tkinter import ttk,filedialog,messagebox
