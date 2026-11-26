@@ -86,3 +86,8 @@ def verify_bank(data,metas):
             raise ValueError(f'第{meta.page_index+1}页编号不在{key}车大纲内，不能使用其他车辆的编号。')
 
     return changed
+
+
+if __name__=='__main__':
+    from outline_manager import main
+    raise SystemExit(main())
