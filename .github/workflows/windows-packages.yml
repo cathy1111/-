@@ -1,0 +1,106 @@
+name: Build Windows delivery packages
+on:
+  push:
+    branches: [fix/offline-windows]
+    paths:
+      - '.github/workflows/windows-packages.yml'
+      - 'packaging/**'
+      - '*.py'
+      - 'soft/requirements-win.txt'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: trial-records-windows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      TRIAL_RELEASE_TAG: v1.6.0-${{ github.run_id }}-${{ github.run_attempt }}
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9.13'
+          architecture: x64
+      - name: Create clean build environment
+        shell: pwsh
+        run: |
+          python -m venv .build-env
+          & .build-env/Scripts/python.exe -m pip install pip==25.3 setuptools==75.8.2 wheel==0.45.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .build-env/Scripts/python.exe -m pip install -r soft/requirements-win.txt paddlepaddle==2.6.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run application regressions on Windows
+        shell: pwsh
+        run: |
+          & .build-env/Scripts/python.exe -m unittest discover -p 'test_*.py' -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Ensure installer compiler
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) { choco install innosetup -y --no-progress }
+          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) { throw 'Inno Setup compiler unavailable' }
+      - name: Build self-contained runtime and model payload
+        shell: pwsh
+        run: |
+          & .build-env/Scripts/python.exe packaging/build_packages.py --payload-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Relocate and test actual local OCR without outbound network
+        shell: pwsh
+        run: |
+          $source=Join-Path $PWD 'dist\TrialRecords'
+          $relocated=Join-Path $PWD 'portable-relocated\TrialRecords'
+          New-Item -ItemType Directory -Force (Split-Path $relocated) | Out-Null
+          Move-Item $source $relocated
+          $exe=Join-Path $relocated 'runtime\python.exe'
+          $pyw=Join-Path $relocated 'runtime\pythonw.exe'
+          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
+          New-NetFirewallRule -DisplayName 'TrialRecordsSmokePython' -Direction Outbound -Program $exe -Action Block -Profile Any | Out-Null
+          New-NetFirewallRule -DisplayName 'TrialRecordsSmokePythonw' -Direction Outbound -Program $pyw -Action Block -Profile Any | Out-Null
+          try {
+            & $exe packaging/smoke_portable.py $relocated
+            $code=$LASTEXITCODE
+          } finally {
+            Remove-NetFirewallRule -DisplayName 'TrialRecordsSmokePython' -ErrorAction SilentlyContinue
+            Remove-NetFirewallRule -DisplayName 'TrialRecordsSmokePythonw' -ErrorAction SilentlyContinue
+            Move-Item $relocated $source
+          }
+          if ($code -ne 0) { throw 'Relocated offline OCR smoke test failed; do not publish packages' }
+      - name: Compile portable ZIP, offline installer and online installer
+        shell: pwsh
+        run: |
+          & .build-env/Scripts/python.exe packaging/build_packages.py --package-only --repo '${{ github.repository }}' --tag $env:TRIAL_RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify offline installer can deploy the application
+        shell: pwsh
+        run: |
+          $target=Join-Path $PWD 'installed-test'
+          $setup=Join-Path $PWD 'dist\TrialRecords-Offline-Setup-1.6.0.exe'
+          $p=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$target") -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw 'Offline installer failed' }
+          & "$target\runtime\python.exe" -c 'import sys,fitz,paddle,tkinter; tkinter.Tcl(); print(sys.executable); print("Installed runtime OK")'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TrialRecords-Windows-Delivery
+          path: |
+            dist/*.zip
+            dist/*.exe
+            dist/SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+      - name: Publish three completed packages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:TRIAL_RELEASE_TAG dist/TrialRecords-Portable-Windows-x64.zip dist/TrialRecords-Offline-Setup-1.6.0.exe dist/TrialRecords-Online-Setup-1.6.0.exe dist/SHA256SUMS.txt --target '${{ github.sha }}' --title 'TrialRecords 1.6.0 - Windows x64' --notes-file packaging/RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
