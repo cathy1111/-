@@ -11,15 +11,16 @@ def _ocr_lines(pairs):
     result=[];i=0
     while i<len(pairs):
         value=pairs[i][0]
-        if oc.NUMBER_RE.fullmatch(value.strip().rstrip('.、')) and i+1<len(pairs):
-            value+=' '+pairs[i+1][0];i+=1
+        if oc.number_token(value) and i+1<len(pairs):
+            value=oc.number_token(value)+' '+pairs[i+1][0];i+=1
         result.append(value);i+=1
     return result
 
 
 def _toc_page(lines):
+    import outline_catalog as oc
     if any(re.fullmatch(r'目\s*录(?:\s*[（(]续[)）])?',line.strip()) for line in lines):return True
-    return sum(bool(re.search(r'[.．…⋯·_]{2,}\s*\d+\s*$',line)) for line in lines)>=2
+    return sum(bool(oc.LEADER_RE.search(line)) for line in lines)>=2
 
 
 def _parse(lines,page,kind,ocr=False):
@@ -28,12 +29,12 @@ def _parse(lines,page,kind,ocr=False):
     while i<len(lines):
         line=lines[i].strip()
         # PDF text extraction sometimes separates a sequence number and heading.
-        if oc.NUMBER_RE.fullmatch(line.rstrip('.、')) and i+1<len(lines):
-            line+=' '+lines[i+1].strip();i+=1
+        if oc.number_token(line) and i+1<len(lines):
+            line=oc.number_token(line)+' '+lines[i+1].strip();i+=1
         # Join a wrapped TOC heading only when the next line has a TOC leader.
-        if kind=='目录' and oc.LINE_RE.match(line) and not re.search(r'[.．…⋯·_]{2,}',line) and i+1<len(lines):
+        if kind=='目录' and oc.split_numbered_line(line) and not oc.LEADER_RE.search(line) and i+1<len(lines):
             following=lines[i+1].strip()
-            if not oc.LINE_RE.match(following) and re.search(r'[.．…⋯·_]{2,}\s*\d+\s*$',following):
+            if not oc.split_numbered_line(following) and oc.LEADER_RE.search(following):
                 line+=following;i+=1
         parsed=oc.entries_from_lines([line])
         for entry in parsed:
