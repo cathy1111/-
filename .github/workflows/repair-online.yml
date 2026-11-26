@@ -2,7 +2,7 @@ name: Verify and repair online installer
 on:
   push:
     branches: [fix/offline-windows]
-    paths: ['.github/workflows/repair-online.yml', 'packaging/common.iss']
+    paths: ['.github/workflows/repair-online.yml']
   workflow_dispatch:
 concurrency:
   group: trial-records-online-repair
@@ -26,42 +26,18 @@ jobs:
           New-Item -ItemType Directory -Force repair-dist | Out-Null
           gh release download $env:RELEASE_TAG --pattern 'SHA256SUMS.txt' --dir repair-dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $line=Get-Content repair-dist/SHA256SUMS.txt | Where-Object { $_ -match 'TrialRecords-Offline-Setup-1.6.0.exe        shell: pwsh
-        run: |
-          $target=Join-Path $PWD 'online-install-test'
-          $log=Join-Path $PWD 'online-install.log'
-          $setup=Join-Path $PWD 'repair-dist\TrialRecords-Online-Setup-1.6.0.exe'
-          $p=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$target","/LOG=$log") -PassThru -Wait
-          Get-Content $log
-          if ($p.ExitCode -ne 0) { throw "Online installer failed with code $($p.ExitCode)" }
-          & "$target\runtime\python.exe" -c 'import sys,fitz,paddle,tkinter; tkinter.Tcl(); print(sys.executable); print("Online installed runtime OK")'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
- }
-          $hash=($line -split '\\s+')[0]
-          if ($hash -notmatch '^[a-f0-9]{64}        shell: pwsh
-        run: |
-          gh release download $env:RELEASE_TAG --pattern 'TrialRecords-Online-Setup-1.6.0.exe' --dir repair-dist
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $target=Join-Path $PWD 'online-install-test'
-          $log=Join-Path $PWD 'online-install.log'
-          $setup=Join-Path $PWD 'repair-dist\TrialRecords-Online-Setup-1.6.0.exe'
-          $p=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$target","/LOG=$log") -PassThru -Wait
-          Get-Content $log
-          if ($p.ExitCode -ne 0) { throw "Online installer failed with code $($p.ExitCode)" }
-          & "$target\runtime\python.exe" -c 'import sys,fitz,paddle,tkinter; tkinter.Tcl(); print(sys.executable); print("Online installed runtime OK")'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-) { throw 'Missing verified offline installer checksum' }
+          $line=Get-Content repair-dist/SHA256SUMS.txt | Where-Object { $_ -match 'TrialRecords-Offline-Setup-1.6.0.exe$' }
+          $hash=($line -split '\s+')[0]
+          if ($hash -notmatch '^[a-f0-9]{64}$') { throw 'Missing verified offline installer checksum' }
           $url="https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/TrialRecords-Offline-Setup-1.6.0.exe"
           $out=Join-Path $PWD 'repair-dist'
-          $compiler='C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe'
+          $compiler='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path $compiler)) { choco install innosetup -y --no-progress }
           & $compiler '/DAppVersion=1.6.0' "/DPortableURL=$url" "/DPortableSHA256=$hash" "/DOutputDir=$out" packaging/online.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify corrected installer and capture detailed installation log
         shell: pwsh
         run: |
-          gh release download $env:RELEASE_TAG --pattern 'TrialRecords-Online-Setup-1.6.0.exe' --dir repair-dist
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $target=Join-Path $PWD 'online-install-test'
           $log=Join-Path $PWD 'online-install.log'
           $setup=Join-Path $PWD 'repair-dist\TrialRecords-Online-Setup-1.6.0.exe'
