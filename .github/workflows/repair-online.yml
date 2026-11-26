@@ -1,0 +1,32 @@
+name: Verify and repair online installer
+on:
+  push:
+    branches: [fix/offline-windows]
+    paths: ['.github/workflows/repair-online.yml', 'packaging/common.iss']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v1.6.0-45800093936-1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download online installer and capture detailed installation log
+        shell: pwsh
+        run: |
+          gh release download $env:RELEASE_TAG --pattern 'TrialRecords-Online-Setup-1.6.0.exe' --dir repair-dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $target=Join-Path $PWD 'online-install-test'
+          $log=Join-Path $PWD 'online-install.log'
+          $setup=Join-Path $PWD 'repair-dist\TrialRecords-Online-Setup-1.6.0.exe'
+          $p=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$target","/LOG=$log") -PassThru -Wait
+          Get-Content $log
+          if ($p.ExitCode -ne 0) { throw "Online installer failed with code $($p.ExitCode)" }
+          & "$target\runtime\python.exe" -c 'import sys,fitz,paddle,tkinter; tkinter.Tcl(); print(sys.executable); print("Online installed runtime OK")'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
