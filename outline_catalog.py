@@ -194,9 +194,11 @@ def read_source(path: Path, ocr_texts=None):
 
 def write_catalog(catalog,path):
     path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
-    with path.open('w',encoding='utf-8-sig',newline='') as f:
+    temporary=path.with_name(path.name+'.writing.tmp')
+    with temporary.open('w',encoding='utf-8-sig',newline='') as f:
         writer=csv.writer(f);writer.writerow(CATALOG_HEADERS)
         for e in catalog.entries:writer.writerow([e.number,e.name,'；'.join(e.aliases),'示例' if e.example or catalog.example else '',e.source_page or '',e.source_kind,e.review_note])
+    temporary.replace(path)
 
 
 def add_outline(metas,catalog):
