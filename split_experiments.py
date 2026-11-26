@@ -98,24 +98,189 @@ def render_top_crop(page: fitz.Page, top_ratio: float = 0.4, zoom: float = 2.5) 
     return pix.tobytes("png")
 
 
-def ocr_texts(png_bytes: bytes) -> List[Tuple[str, float]]:
+# OCR coordinates are kept so a vehicle identifier is associated with its label,
+# rather than with unrelated mileage or instrument numbers later in the page.
+@dataclass
+class OCRBox:
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    text: str
+    confidence: float
+
+
+VEHICLE_LABEL = re.compile(r"试验车号|车辆编号|试验车编号|车号")
+OTHER_FIELD = re.compile(r"里程|燃油|油量|摩托|负载|气象|天气|温度|湿度|风力|海拔|序号|仪器|有效期|试验时间|试验地点|车型|产品型号")
+
+
+def compact_text(text: str) -> str:
+    import unicodedata
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)).upper()
+
+
+def parse_vehicle_value(text: str) -> str:
+    value = compact_text(text).strip(":：,，;；.。|[]()（）")
+    value = value.replace("—", "-").replace("–", "-")
+    # Preserve every recognized letter and digit; do not guess O/0, B/8 or E/F.
+    if re.fullmatch(r"(?:[A-Z]{1,3}-?)?\d{2,6}", value):
+        return value
+    return ""
+
+
+def labelled_vehicle(text: str) -> str:
+    text = compact_text(text)
+    match = VEHICLE_LABEL.search(text)
+    if not match:
+        return ""
+    tail = OTHER_FIELD.split(text[match.end():], maxsplit=1)[0]
+    return parse_vehicle_value(tail)
+
+
+def vehicle_from_texts(texts: List[Tuple[str, float]]) -> str:
+    """Conservative fallback for OCR engines with no box coordinates."""
+    for i, (text, confidence) in enumerate(texts):
+        if not VEHICLE_LABEL.search(compact_text(text)):
+            continue
+        direct = labelled_vehicle(text)
+        if direct:
+            return direct
+        pieces = []
+        for following, _ in texts[i + 1:i + 5]:
+            normalized = compact_text(following)
+            if OTHER_FIELD.search(normalized) or VEHICLE_LABEL.search(normalized):
+                break
+            if not re.fullmatch(r"[A-Z0-9-]{1,9}", normalized):
+                break
+            pieces.append(normalized)
+        # Prefer a combined letter + digits value over an isolated number block.
+        if len(pieces) >= 2 and re.fullmatch(r"[A-Z]{1,3}-?", pieces[0]):
+            value = parse_vehicle_value("".join(pieces))
+            if value:
+                return value
+        if len(pieces) == 1:
+            value = parse_vehicle_value(pieces[0])
+            if value:
+                return value
+    return ""
+
+
+def vehicle_anchors(boxes: List[OCRBox]) -> List[OCRBox]:
+    anchors = [b for b in boxes if VEHICLE_LABEL.search(compact_text(b.text))]
+    # The printed label itself is sometimes detected as separate '车' and '号'.
+    for first in boxes:
+        if compact_text(first.text) != "车":
+            continue
+        for second in boxes:
+            height = max(first.y1-first.y0, second.y1-second.y0, 1)
+            if compact_text(second.text) == "号" and 0 <= second.x0-first.x1 <= height*2 and abs(second.y0-first.y0) <= height*.7:
+                anchors.append(OCRBox(first.x0, min(first.y0,second.y0), second.x1, max(first.y1,second.y1), "车号", min(first.confidence,second.confidence)))
+    return anchors
+
+
+def vehicle_from_boxes(boxes: List[OCRBox]) -> str:
+    candidates = set()
+    for anchor in vehicle_anchors(boxes):
+        direct = labelled_vehicle(anchor.text)
+        if direct:
+            candidates.add(direct)
+            continue
+        height = max(anchor.y1-anchor.y0, 1)
+        cy = (anchor.y0+anchor.y1)/2
+        nearby = [b for b in boxes if b is not anchor and b.x0 >= anchor.x1-height*.2 and
+                  b.x0-anchor.x1 <= height*16 and abs((b.y0+b.y1)/2-cy) <= max(height,b.y1-b.y0)*1.3]
+        nearby.sort(key=lambda b:b.x0)
+        pieces = []
+        for box in nearby:
+            t = compact_text(box.text)
+            if OTHER_FIELD.search(t):
+                break
+            if not re.fullmatch(r"[A-Z0-9-]{1,9}",t):
+                break
+            if pieces and box.x0-pieces[-1].x1 > height*2:
+                break
+            pieces.append(box)
+        # Join adjacent OCR fragments, including separated digits and letters.
+        value = parse_vehicle_value("".join(b.text for b in pieces))
+        if value:
+            candidates.add(value)
+    # Different plausible identifiers in the same field require review, not guessing.
+    return next(iter(candidates)) if len(candidates)==1 else ""
+
+
+def ocr_boxes(png_bytes: bytes) -> List[OCRBox]:
     import numpy as np
     from io import BytesIO
     from PIL import Image
-
-    img = Image.open(BytesIO(png_bytes)).convert("RGB")
-    arr = np.array(img)
+    arr = np.array(Image.open(BytesIO(png_bytes)).convert("RGB"))
     result = get_ocr().ocr(arr, cls=True)
-    items: List[Tuple[float, float, str, float]] = []
-    if not result or result[0] is None:
-        return []
-    for line in result[0]:
-        box, (text, conf) = line
-        xs = [p[0] for p in box]
-        ys = [p[1] for p in box]
-        items.append((min(ys), min(xs), text.strip(), float(conf)))
-    items.sort(key=lambda x: (round(x[0] / 12), x[1]))
-    return [(t, c) for _, _, t, c in items]
+    boxes = []
+    if result and result[0]:
+        for coords, (text, score) in result[0]:
+            xs=[p[0] for p in coords]; ys=[p[1] for p in coords]
+            boxes.append(OCRBox(min(xs),min(ys),max(xs),max(ys),text.strip(),float(score)))
+    boxes.sort(key=lambda b:(round(b.y0/12),b.x0))
+    return boxes
+
+
+def retry_vehicle(page: fitz.Page, initial: List[OCRBox], debug_dir: Optional[Path], page_index: int) -> Tuple[str, str]:
+    import json
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    trace = []
+    def remember(tag, png, boxes):
+        trace.append({"pass":tag,"texts":[{"text":b.text,"confidence":b.confidence,"box":[b.x0,b.y0,b.x1,b.y1]} for b in boxes]})
+        if debug_dir is not None:
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            (debug_dir/f"page-{page_index+1:04d}-{tag}.png").write_bytes(png)
+    # A second, expanded crop can locate the printed label missed by the first pass.
+    zoom = 3.0
+    png = render_top_crop(page, top_ratio=0.60, zoom=zoom)
+    boxes = ocr_boxes(png)
+    remember("expanded",png,boxes)
+    value = vehicle_from_boxes(boxes)
+    if value:
+        return value, "车号经扩大区域复识别"
+    anchors = vehicle_anchors(boxes)
+    if not anchors:
+        # Initial boxes were produced at zoom 2.5; scale their coordinates.
+        anchors = [OCRBox(b.x0*zoom/2.5,b.y0*zoom/2.5,b.x1*zoom/2.5,b.y1*zoom/2.5,b.text,b.confidence) for b in vehicle_anchors(initial)]
+    candidates = set()
+    for index, anchor in enumerate(anchors[:2]):
+        h=max(anchor.y1-anchor.y0,1)
+        right=anchor.x1+16*h
+        # Respect the next printed field boundary (e.g. mileage), even when its
+        # text would sort before the vehicle value in the flattened OCR output.
+        for b in boxes:
+            if OTHER_FIELD.search(compact_text(b.text)) and b.x0>anchor.x1 and abs(b.y0-anchor.y0)<h*2:
+                right=min(right,b.x0)
+        rect=fitz.Rect((anchor.x1+h*.1)/zoom,(anchor.y0-h*.6)/zoom,right/zoom,(anchor.y1+h*1.1)/zoom) & page.rect
+        if rect.is_empty or rect.width < h/zoom:
+            continue
+        raw=page.get_pixmap(matrix=fitz.Matrix(5,5),clip=rect,alpha=False).tobytes("png")
+        for variant in ("original","contrast"):
+            image=Image.open(BytesIO(raw)).convert("RGB")
+            if variant=="contrast":
+                image=ImageOps.autocontrast(ImageOps.grayscale(image)).convert("RGB")
+            buf=BytesIO();image.save(buf,format="PNG");crop=buf.getvalue()
+            local=ocr_boxes(crop)
+            remember(f"cell-{index}-{variant}",crop,local)
+            # Only accept one physical text row inside this bounded cell.
+            if local:
+                heights=[max(b.y1-b.y0,1) for b in local]
+                if max(b.y0 for b in local)-min(b.y0 for b in local) <= max(heights)*.9:
+                    value=parse_vehicle_value("".join(b.text for b in sorted(local,key=lambda b:b.x0)))
+                    if value:
+                        candidates.add(value)
+    if debug_dir is not None:
+        (debug_dir/f"page-{page_index+1:04d}-ocr.json").write_text(json.dumps(trace,ensure_ascii=False,indent=2),encoding="utf-8")
+    if len(candidates)==1:
+        return next(iter(candidates)), "车号经单元格放大复识别"
+    return "", "车号复识别未确定" + ("（候选冲突）" if len(candidates)>1 else "")
+
+
+def ocr_texts(png_bytes: bytes) -> List[Tuple[str, float]]:
+    return [(b.text,b.confidence) for b in ocr_boxes(png_bytes)]
 
 
 def extract_fields(texts: List[Tuple[str, float]]) -> Tuple[str, str, str, str, str, str]:
@@ -197,48 +362,8 @@ def extract_fields(texts: List[Tuple[str, float]]) -> Tuple[str, str, str, str, 
             loc_s = mloc.group(1).strip(" :：.-·、")
     loc_s = re.sub(r"(气象条件|天气|温度).*$", "", loc_s).strip()
 
-    # ---- 车型/车号 ----
-    def parse_vehicle(s: str) -> str:
-        m_v = VEHICLE_RE.search(s.replace(" ", ""))
-        if not m_v:
-            return ""
-        return (m_v.group(1) + m_v.group(2)).upper()
-
-    vehicle = ""
-    for i, (t, _) in enumerate(texts):
-        if "车号" not in t:
-            continue
-        vehicle = parse_vehicle(t)
-        if vehicle:
-            break
-        for j in range(i + 1, min(i + 4, len(texts))):
-            cand = texts[j][0].replace(" ", "")
-            if any(k in cand for k in ("燃油", "里程", "摩托", "负载", "油量", "车辆", "编号")):
-                continue
-            # 只接受短文本，避免仪器序列号
-            if len(cand) > 8:
-                continue
-            vehicle = parse_vehicle(cand)
-            if vehicle:
-                break
-            if re.fullmatch(r"[A-Za-z]?\d{2,5}", cand):
-                vehicle = cand.upper()
-                break
-        break
-    if not vehicle:
-        for i, (t, _) in enumerate(texts):
-            if "车辆条件" not in t and "车号" not in t:
-                continue
-            for j in range(i, min(i + 6, len(texts))):
-                cand = texts[j][0].replace(" ", "")
-                if len(cand) > 8:
-                    continue
-                if any(k in cand for k in ("燃油", "里程", "摩托", "负载", "油量", "条件", "编号")):
-                    continue
-                vehicle = parse_vehicle(cand)
-                if vehicle:
-                    break
-            break
+    # Read only the explicit vehicle-number label, never instrument serial numbers.
+    vehicle = vehicle_from_texts(texts)
 
     if not experiment:
         note_parts.append("实验名称未识别")
@@ -256,6 +381,7 @@ def scan_pdf(
     pdf_path: Path,
     top_ratio: float = 0.4,
     max_pages: Optional[int] = None,
+    debug_dir: Optional[Path] = None,
 ) -> List[PageMeta]:
     doc = fitz.open(pdf_path)
     n = doc.page_count if max_pages is None else min(doc.page_count, max_pages)
@@ -266,8 +392,20 @@ def scan_pdf(
     for i in range(n):
         page = doc[i]
         png = render_top_crop(page, top_ratio=top_ratio)
-        texts = ocr_texts(png)
-        experiment, vehicle, time_disp, time_code, loc_s, note = extract_fields(texts)
+        boxes = ocr_boxes(png)
+        texts = [(b.text,b.confidence) for b in boxes]
+        experiment, _, time_disp, time_code, loc_s, note = extract_fields(texts)
+        vehicle = vehicle_from_boxes(boxes)
+        vehicle_note = ""
+        if not vehicle:
+            print(f"  第{i+1}页车号未确定，正在放大复识别…",flush=True)
+            vehicle, vehicle_note = retry_vehicle(page, boxes, debug_dir, i)
+        notes = [part for part in note.split(";") if part and part != "车号未识别"]
+        if not vehicle:
+            notes.append("车号未识别")
+        if vehicle_note:
+            notes.append(vehicle_note)
+        note = ";".join(notes)
 
         # Missing values remain unknown; never borrow fields from a different experiment.
         group_key = "|".join([experiment, vehicle, time_code, loc_s]) if all([experiment, vehicle, time_code, loc_s]) else f"未识别_p{i+1}"
@@ -452,7 +590,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
     if not pdf.exists():
         print(f"找不到输入文件: {pdf}", file=sys.stderr)
         return 1
-    metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages)
+    metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages, debug_dir=out_dir / "vehicle_debug")
     write_preview_csv(metas, out_dir / "preview.csv", version)
 
     groups = [(m, [m.page_index]) for m in metas]
@@ -479,7 +617,7 @@ def cmd_split(args: argparse.Namespace) -> int:
         print(f"读取已有预览 {preview_csv} （若要重新 OCR 加 --rescan）")
         metas = load_preview_csv(preview_csv)
     else:
-        metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages)
+        metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages, debug_dir=out_dir / "vehicle_debug")
         write_preview_csv(metas, preview_csv, version)
 
     print(f"开始写出拆分 PDF（版本 {version}）…")
