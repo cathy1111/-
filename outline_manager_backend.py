@@ -11,6 +11,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from vehicle_outlines import vehicle_key
+from outline_catalog import normalize_number
 
 SUPPORTED={'.pdf','.csv','.tsv','.xlsx','.docx','.txt'}
 
@@ -74,11 +75,17 @@ def existing_catalog_status(root,vehicle):
     path=Path(root)/'outlines'/f'vehicle_{code}.csv'
     if not path.is_file():return '尚未导入'
     try:
-        with path.open(encoding='utf-8-sig',newline='') as stream:rows=list(csv.DictReader(stream))
+        with path.open(encoding='utf-8-sig',newline='') as stream:
+            reader=csv.DictReader(stream)
+            if not {'大纲序号','科目名称'}.issubset(set(reader.fieldnames or [])):return '目录格式不完整，请重新导入'
+            rows=list(reader)
         if not rows:return '目录为空，请检查'
+        for row in rows:
+            if not row.get('科目名称'):return '目录不完整，请重新导入'
+            normalize_number(row.get('大纲序号',''))
         example=any(r.get('示例标记')=='示例' for r in rows)
         return f'已导入 {len(rows)} 项'+('（示例）' if example else '')
-    except (OSError,UnicodeError,csv.Error):return '目录存在，需检查'
+    except (OSError,UnicodeError,csv.Error,ValueError):return '目录存在，需检查'
 
 
 def worker_interpreter(executable=None):
