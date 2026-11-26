@@ -19,6 +19,7 @@ from typing import List, Optional, Tuple
 import fitz  # PyMuPDF
 
 _OCR = None
+PROGRAM_VERSION = "1.2.0"
 
 TIME_RE = re.compile(
     r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*\D{0,4}日"
@@ -350,7 +351,45 @@ def field_from_boxes(boxes, label_pattern, parse):
 
 def parse_place_value(text):
     text=compact_text(text).strip(":：,，;；.。|[]()（）")
-    return text if re.fullmatch(r"[\u4e00-\u9fffA-Z0-9·.、-]{2,25}",text) and re.search(r"[\u4e00-\u9fffA-Z]",text) else ""
+    # A unit or a weather measurement must never become a trial location.
+    if re.search(r"℃|°|天气|温度|湿度|风力|海拔|气象条件|M/S|KM/H|%",text):return ""
+    chinese=re.findall(r"[\u4e00-\u9fff]",text)
+    if len(chinese)>=2 and re.fullmatch(r"[\u4e00-\u9fffA-Z0-9·.、-]{2,30}",text):return text
+    # Preserve longer Latin place names, but reject isolated C, KM, H, etc.
+    if re.fullmatch(r"[A-Z][A-Z .-]{3,29}",text) and text not in {"CELSIUS","TEMPERATURE","HUMIDITY"}:return text
+    return ""
+
+
+def retry_labelled_field(page, boxes, label_pattern, parse, debug_dir, page_index, tag):
+    """Retry only the value cell to the right of the relevant printed label."""
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    candidates=set()
+    anchors=[b for b in boxes if label_pattern.search(compact_text(b.text))]
+    for index,anchor in enumerate(anchors[:2]):
+        h=max(anchor.y1-anchor.y0,1)
+        # Boxes from the primary header/footer pass use full-page coordinates at 2.5x.
+        right=min(page.rect.width*2.5,anchor.x1+22*h)
+        center=(anchor.y0+anchor.y1)/2
+        for other in boxes:
+            if other.x0>anchor.x1 and ALL_FIELD_LABELS.search(compact_text(other.text)) and abs((other.y0+other.y1)/2-center)<=h*1.3:
+                right=min(right,other.x0)
+        rect=fitz.Rect((anchor.x1+h*.1)/2.5,(anchor.y0-h*.5)/2.5,right/2.5,(anchor.y1+h*.9)/2.5)&page.rect
+        if rect.is_empty:continue
+        image=Image.open(BytesIO(page.get_pixmap(matrix=fitz.Matrix(5,5),clip=rect,alpha=False).tobytes('png')))
+        for variant in ['original','contrast']:
+            processed=image if variant=='original' else ImageOps.autocontrast(ImageOps.grayscale(image))
+            data=BytesIO();processed.save(data,format='PNG');png=data.getvalue()
+            if debug_dir is not None:
+                debug_dir.mkdir(parents=True,exist_ok=True)
+                (debug_dir/f'page-{page_index+1:04d}-{tag}-{index}-{variant}.png').write_bytes(png)
+            local=ocr_boxes(png)
+            # Ignore mixed lines and take only a single row from the bounded cell.
+            if local and max(b.y0 for b in local)-min(b.y0 for b in local)<=max(max(b.y1-b.y0,1) for b in local):
+                text=''.join(b.text for b in sorted(local,key=lambda b:b.x0))
+                value=parse(text)
+                if value:candidates.add(value)
+    return next(iter(candidates)) if len(candidates)==1 else ''
 
 
 def ocr_footer(page, zoom=2.5):
@@ -472,6 +511,9 @@ def load_confirmed_rules(path: Optional[Path] = None):
     for rule in data.get("rules",[]):
         if not isinstance(rule,dict) or not isinstance(rule.get("experiment_contains"),str) or not rule["experiment_contains"]:
             raise ValueError("纠正规则必须指定非空的 experiment_contains")
+        if rule.get("confirmed_fields"):
+            if not re.fullmatch(r"[a-f0-9]{64}",str(rule.get("page_fingerprint",""))):raise ValueError("已确认页面字段必须绑定有效页面指纹")
+            if not isinstance(rule["confirmed_fields"],dict) or any(k not in {"vehicle","place"} or not isinstance(v,str) or not v for k,v in rule["confirmed_fields"].items()):raise ValueError("已确认页面字段格式错误")
         for key in ("vehicle_aliases","place_aliases"):
             aliases=rule.get(key,{})
             if not isinstance(aliases,dict) or any(not isinstance(k,str) or not k or not isinstance(v,str) or not v for k,v in aliases.items()):
@@ -479,26 +521,38 @@ def load_confirmed_rules(path: Optional[Path] = None):
     return data.get("rules",[])
 
 
-def apply_confirmed_rules(experiment, vehicle, place, rules):
+def apply_confirmed_rules(experiment, vehicle, place, rules, page_fingerprint=None):
     changes=[]
     # Only a full observed error value in a matching form can trigger correction.
     # Never fuzzy-match all locations or apply one vehicle number to all forms.
     vehicle_targets=set();place_targets=set()
     for rule in rules:
+        if rule.get("page_fingerprint") and rule["page_fingerprint"] != page_fingerprint:continue
         if compact_text(rule["experiment_contains"]) not in compact_text(experiment):continue
+        # Exact image identity allows reuse of this page's human-confirmed fields,
+        # including fields the OCR still cannot read. Never use this for another page.
+        confirmed=rule.get("confirmed_fields",{}) if rule.get("page_fingerprint") else {}
+        if confirmed.get("vehicle"):vehicle_targets.add(confirmed["vehicle"])
+        if confirmed.get("place"):place_targets.add(confirmed["place"])
         if vehicle in rule.get("vehicle_aliases",{}):vehicle_targets.add(rule["vehicle_aliases"][vehicle])
         if place in rule.get("place_aliases",{}):place_targets.add(rule["place_aliases"][place])
     if len(vehicle_targets)==1:
         corrected=next(iter(vehicle_targets))
-        changes.append(f"已确认规则修正车号：{vehicle}→{corrected}")
+        if corrected!=vehicle:changes.append(f"已确认规则修正车号：{vehicle or '未识别'}→{corrected}")
         vehicle=corrected
     elif len(vehicle_targets)>1:changes.append("车号纠正规则冲突，未自动修改")
     if len(place_targets)==1:
         corrected=next(iter(place_targets))
-        changes.append(f"已确认规则修正地点：{place}→{corrected}")
+        if corrected!=place:changes.append(f"已确认规则修正地点：{place or '未识别'}→{corrected}")
         place=corrected
     elif len(place_targets)>1:changes.append("地点纠正规则冲突，未自动修改")
     return vehicle,place,changes
+
+
+def page_fingerprint(page):
+    import hashlib
+    pix=page.get_pixmap(matrix=fitz.Matrix(1,1),alpha=False)
+    return hashlib.sha256(str((pix.width,pix.height)).encode()+pix.samples).hexdigest()
 
 
 def pdf_identity(path: Path):
@@ -553,7 +607,7 @@ def scan_pdf(
         parsed_date = field_from_boxes(boxes, DATE_LABEL, normalized_date_value)
         parsed_place = field_from_boxes(boxes, PLACE_LABEL, parse_place_value)
         vehicle = vehicle_from_boxes(boxes)
-        if not all([vehicle, parsed_date or time_code, parsed_place or loc_s]):
+        if not all([vehicle, parsed_date, parsed_place]):
             footer, footer_png = ocr_footer(page)
             boxes += footer
             if debug_dir is not None:
@@ -562,22 +616,27 @@ def scan_pdf(
             parsed_date = field_from_boxes(boxes, DATE_LABEL, normalized_date_value)
             parsed_place = field_from_boxes(boxes, PLACE_LABEL, parse_place_value)
             vehicle = vehicle_from_boxes(boxes)
-        if parsed_date:
-            time_code=parsed_date
-            time_disp=display_time(parsed_date[:4],parsed_date[4:6],parsed_date[6:8])
-        if parsed_place:
-            loc_s=parsed_place
+        # Discard flattened-text fallbacks: they can select a temperature unit
+        # or an instrument expiry date from the next row.
+        legacy_place=loc_s
+        if not parsed_date:
+            parsed_date=retry_labelled_field(page,boxes,DATE_LABEL,normalized_date_value,debug_dir,i,'date')
+        if not parsed_place:
+            parsed_place=retry_labelled_field(page,boxes,PLACE_LABEL,parse_place_value,debug_dir,i,'place')
+        time_code=parsed_date
+        time_disp=display_time(parsed_date[:4],parsed_date[4:6],parsed_date[6:8]) if parsed_date else ''
+        loc_s=parsed_place
         vehicle_note = ""
         if not vehicle:
             print(f"  第{i+1}页车号未确定，正在放大复识别…",flush=True)
             vehicle, vehicle_note = retry_vehicle(page, boxes, debug_dir, i)
-        vehicle_raw, location_ocr_raw = vehicle, loc_s
-        vehicle, loc_s, corrections = apply_confirmed_rules(experiment, vehicle, loc_s, confirmed_rules)
+        vehicle_raw, location_ocr_raw = vehicle, loc_s or legacy_place
+        vehicle, loc_s, corrections = apply_confirmed_rules(experiment, vehicle, loc_s, confirmed_rules, page_fingerprint(page) if any(r.get("page_fingerprint") for r in confirmed_rules) else None)
         notes = [part for part in note.split(";") if part and part not in {"车号未识别", "时间未识别", "地点未识别"}]
         if not time_code:
             notes.append("时间未识别")
         if not loc_s:
-            notes.append("地点未识别")
+            notes.append("地点待核对：未从地点单元格读到有效地点")
         if not vehicle:
             notes.append("车号未识别")
         if vehicle_note:
@@ -743,6 +802,8 @@ def load_preview_csv(csv_path: Path) -> List[PageMeta]:
                 checked=normalized_date_value(time_code)
                 if not checked:raise ValueError("预览清单日期无效："+time_code+"；请填写8位YYYYMMDD")
                 time_code=checked
+            if location and not parse_place_value(location):
+                raise ValueError("清单中存在无效地点："+location+"。请核对试验地点，不要填写温度单位或乱码。")
             filename_base = build_filename_base(experiment, vehicle, time_code, location)
             if not group_key:
                 group_key = f"{sanitize_field(time_code)}_{sanitize_field(location)}"
@@ -788,7 +849,9 @@ def cmd_preview(args: argparse.Namespace) -> int:
     print(f"\n预计拆成 {len(groups)} 个实验文件（版本 {version}）：")
     for meta, pages in groups:
         print(f"  {meta.filename_base}-{version}.pdf  ← 页 {[p+1 for p in pages]}")
-    print("\n请打开 out/preview.csv 核对；确认无误后执行：")
+    print("\n本次只生成预览清单，不导出PDF。请核对车号、日期和地点，保存关闭CSV后运行 run_export.bat。")
+    print("命名规则：实验名称-完整车号-实际试验日期(YYYYMMDD)-试验地点-版本号.pdf")
+    print("命令行导出方式：")
     print(
         f"  python3 split_experiments.py split --input {pdf} --out {out_dir} --version {version}"
     )
@@ -866,6 +929,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    print(f"试验记录归档工具 v{PROGRAM_VERSION}：按字段定位识别，使用核对清单导出。",flush=True)
     parser = build_parser()
     args = parser.parse_args()
     return args.func(args)
