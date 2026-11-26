@@ -35,7 +35,7 @@ jobs:
           python -m venv .build-env
           & .build-env/Scripts/python.exe -m pip install pip==25.3 setuptools==75.8.2 wheel==0.45.1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & .build-env/Scripts/python.exe -m pip install -r soft/requirements-win.txt paddlepaddle==2.6.1
+          & .build-env/Scripts/python.exe -m pip install -r soft/requirements-win.txt paddlepaddle==2.6.2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run application regressions on Windows
         shell: pwsh
