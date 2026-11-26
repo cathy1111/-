@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import fitz  # PyMuPDF
+import outline_catalog as outlines
 
 _OCR = None
-PROGRAM_VERSION = "1.2.0"
+PROGRAM_VERSION = "1.3.0"
 
 TIME_RE = re.compile(
     r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*\D{0,4}日"
@@ -42,6 +43,11 @@ class PageMeta:
     note: str = ""
     vehicle_raw: str = ""
     location_ocr_raw: str = ""
+    outline_no: str = ""
+    outline_status: str = "未启用"
+    outline_candidates: str = ""
+    outline_active: bool = False
+    outline_example: bool = False
 
 
 def get_ocr():
@@ -673,6 +679,57 @@ def scan_pdf(
     return metas
 
 
+def refresh_filename(meta):
+    base=build_filename_base(meta.experiment,meta.vehicle,meta.time_code,meta.location_raw)
+    meta.filename_base=outlines.prefix_filename(base,meta.outline_no,meta.outline_active,meta.outline_example)
+    return meta.filename_base
+
+
+def active_outline(explicit=None):
+    path=Path(explicit).expanduser().resolve() if explicit else Path(__file__).resolve().parent/'outline_catalog.csv'
+    if not path.is_file():
+        if explicit:raise ValueError('找不到大纲目录：'+str(path))
+        return None
+    return outlines.read_source(path,ocr_texts)[0]
+
+
+def attach_outline(metas,catalog):
+    outlines.add_outline(metas,catalog)
+    for meta in metas:refresh_filename(meta)
+    if catalog:
+        print(f'已启用大纲：{catalog.path.name}，共{len(catalog.entries)}个目录条目。',flush=True)
+        if catalog.example:print('注意：当前为示例大纲，输出文件名保留“示例”标记，不能作为正式编号。',flush=True)
+        pending=sum(not m.outline_no for m in metas)
+        if pending:print(f'{pending}页未能唯一匹配大纲；请在preview.csv核对大纲序号，未填时输出“待匹配”前缀。',flush=True)
+    else:print('尚未导入大纲，沿用不带序号的命名。要增加序号请先运行import_outline.bat。',flush=True)
+
+
+def write_outline_identity(out_dir,catalog):
+    import json
+    data={'active':bool(catalog)}
+    if catalog:
+        data.update({'path':str(catalog.path.resolve()),'sha256':catalog.sha256,'example':catalog.example,
+                     'numbers':sorted({e.number for e in catalog.entries})})
+    (out_dir/'preview-outline.json').write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
+
+
+def verify_outline_identity(out_dir,metas):
+    import json,hashlib
+    path=out_dir/'preview-outline.json'
+    if not path.is_file():
+        if any(m.outline_active for m in metas):raise ValueError('缺少大纲校验记录，请用新版重新生成预览。')
+        return
+    data=json.loads(path.read_text(encoding='utf-8'))
+    if bool(data['active'])!=any(m.outline_active for m in metas):raise ValueError('清单的大纲模式被改变，请重新生成预览。')
+    if not data['active']:return
+    source=Path(data['path'])
+    if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest()!=data['sha256']:
+        raise ValueError('预览使用的大纲已修改或丢失，请重新生成预览后核对，避免用错项目序号。')
+    for meta in metas:
+        if not meta.outline_active or meta.outline_example!=data['example']:raise ValueError('清单的大纲/示例标记与原预览不一致，请重新生成预览。')
+        if meta.outline_no and meta.outline_no not in data['numbers']:raise ValueError('清单中的大纲序号不在当前目录中：'+meta.outline_no+'。请先在目录补充科目，再重新预览。')
+
+
 def write_preview_csv(metas: List[PageMeta], csv_path: Path, version: str) -> None:
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="", encoding="utf-8-sig") as f:
@@ -691,9 +748,15 @@ def write_preview_csv(metas: List[PageMeta], csv_path: Path, version: str) -> No
                 "备注",
                 "OCR原始车号",
                 "OCR原始地点",
+                "大纲序号",
+                "大纲匹配状态",
+                "候选大纲科目",
+                "大纲模式",
+                "是否示例大纲",
             ]
         )
         for m in metas:
+            refresh_filename(m)
             w.writerow(
                 [
                     m.page_index + 1,
@@ -708,6 +771,11 @@ def write_preview_csv(metas: List[PageMeta], csv_path: Path, version: str) -> No
                     m.note,
                     m.vehicle_raw,
                     m.location_ocr_raw,
+                    m.outline_no,
+                    m.outline_status,
+                    m.outline_candidates,
+                    "启用" if m.outline_active else "未启用",
+                    "是" if m.outline_example else "否",
                 ]
             )
     print(f"已写入预览: {csv_path}")
@@ -767,6 +835,7 @@ def split_pdf(
     written: List[Path] = []
 
     for meta, pages in groups:
+        refresh_filename(meta)
         base = f"{meta.filename_base}-{version}"
         dest = unique_filename(out_dir, base, used)
         new_doc = fitz.open()
@@ -807,6 +876,11 @@ def load_preview_csv(csv_path: Path) -> List[PageMeta]:
             filename_base = build_filename_base(experiment, vehicle, time_code, location)
             if not group_key:
                 group_key = f"{sanitize_field(time_code)}_{sanitize_field(location)}"
+            outline_no=row.get("大纲序号", "").strip()
+            if outline_no:outline_no=outlines.normalize_number(outline_no)
+            outline_active=row.get("大纲模式", "未启用")=="启用" or bool(outline_no)
+            outline_example=row.get("是否示例大纲", "否")=="是"
+            filename_base=outlines.prefix_filename(filename_base,outline_no,outline_active,outline_example)
             metas.append(
                 PageMeta(
                     page_index=int(row["页码(从1开始)"]) - 1,
@@ -820,6 +894,11 @@ def load_preview_csv(csv_path: Path) -> List[PageMeta]:
                     note=row.get("备注", ""),
                     vehicle_raw=row.get("OCR原始车号", ""),
                     location_ocr_raw=row.get("OCR原始地点", ""),
+                    outline_no=outline_no,
+                    outline_status=row.get("大纲匹配状态", "未启用"),
+                    outline_candidates=row.get("候选大纲科目", ""),
+                    outline_active=outline_active,
+                    outline_example=outline_example,
                 )
             )
     return metas
@@ -842,15 +921,18 @@ def cmd_preview(args: argparse.Namespace) -> int:
         print(f"找不到输入文件: {pdf}", file=sys.stderr)
         return 1
     metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages, debug_dir=out_dir / "vehicle_debug")
+    catalog=active_outline(getattr(args,'outline',None))
+    attach_outline(metas,catalog)
     write_preview_csv(metas, out_dir / "preview.csv", version)
     write_preview_identity(pdf, out_dir)
+    write_outline_identity(out_dir,catalog)
 
     groups = [(m, [m.page_index]) for m in metas]
     print(f"\n预计拆成 {len(groups)} 个实验文件（版本 {version}）：")
     for meta, pages in groups:
         print(f"  {meta.filename_base}-{version}.pdf  ← 页 {[p+1 for p in pages]}")
     print("\n本次只生成预览清单，不导出PDF。请核对车号、日期和地点，保存关闭CSV后运行 run_export.bat。")
-    print("命名规则：实验名称-完整车号-实际试验日期(YYYYMMDD)-试验地点-版本号.pdf")
+    print("命名规则：启用大纲时为 大纲序号-实验名称-完整车号-实际试验日期(YYYYMMDD)-试验地点-版本号.pdf")
     print("命令行导出方式：")
     print(
         f"  python3 split_experiments.py split --input {pdf} --out {out_dir} --version {version}"
@@ -871,13 +953,20 @@ def cmd_split(args: argparse.Namespace) -> int:
         count=verify_preview_identity(pdf,out_dir)
         print(f"读取已核对预览 {preview_csv}；保留表格修改，不重新OCR。")
         metas = load_preview_csv(preview_csv)
+        selected_outline=Path(args.outline).expanduser() if getattr(args,'outline',None) else Path(__file__).resolve().parent/'outline_catalog.csv'
+        if selected_outline.is_file() and not any(m.outline_active for m in metas):
+            raise ValueError('已导入大纲，但当前清单尚未按大纲匹配。请先重新运行run_preview.bat，再核对导出。')
+        verify_outline_identity(out_dir,metas)
         page_numbers=[m.page_index for m in metas]
         if not page_numbers or len(set(page_numbers))!=len(page_numbers) or any(i<0 or i>=count for i in page_numbers):
             raise ValueError("预览清单的页码重复、为空或超出原PDF范围，请检查清单。")
     else:
         metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages, debug_dir=out_dir / "vehicle_debug")
+        catalog=active_outline(getattr(args,'outline',None))
+        attach_outline(metas,catalog)
         write_preview_csv(metas, preview_csv, version)
         write_preview_identity(pdf,out_dir)
+        write_outline_identity(out_dir,catalog)
 
     print(f"开始写出拆分 PDF（版本 {version}）…")
     written = split_pdf(pdf, metas, out_dir, version)
@@ -885,15 +974,38 @@ def cmd_split(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_import_outline(args):
+    import json
+    source=Path(args.input).expanduser().resolve()
+    destination=Path(args.out).expanduser().resolve()
+    destination.mkdir(parents=True,exist_ok=True)
+    catalog,notes=outlines.read_source(source,ocr_texts)
+    target=destination/'outline_catalog.csv'
+    if target.exists():
+        # Keep the previous project's directory rather than silently losing it.
+        backup=destination/'outline_catalog.previous.csv'
+        backup.write_bytes(target.read_bytes())
+    outlines.write_catalog(catalog,target)
+    report=['来源：'+source.name,'导入条目：'+str(len(catalog.entries)),
+            '当前为示例目录，输出将带示例标记。' if catalog.example else '当前为导入的真实目录，请核对序号与科目名称。',
+            *notes,'请核对outline_catalog.csv，可在别名列添加记录表名称（多个名称用分号分隔）。',
+            '完成后关闭目录文件，再运行run_preview.bat并拖入原始记录PDF。']
+    (destination/'outline_import_report.txt').write_text('\n'.join(report),encoding='utf-8-sig')
+    print('\n'.join(report),flush=True)
+    print('已保存：'+str(target),flush=True)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="按试验时间+地点拆分实验记录 PDF；文件名=实验名称-车号-时间-地点-版本"
+        description="试验记录归档：可导入大纲，文件名=[大纲序号-]实验名称-车号-时间-地点-版本"
     )
     sub = p.add_subparsers(dest="command", required=True)
 
     def add_common(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--input", "-i", required=True, help="输入 PDF 路径")
         sp.add_argument("--out", "-o", default="out", help="输出目录")
+        sp.add_argument("--outline", default=None, help="可选大纲文件；默认使用程序目录中的outline_catalog.csv")
         sp.add_argument(
             "--version",
             "-V",
@@ -925,6 +1037,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="忽略已有 preview.csv，重新 OCR",
     )
     sp_split.set_defaults(func=cmd_split)
+    sp_outline=sub.add_parser("import-outline",help="导入真实或示例大纲，生成可编辑的目录清单")
+    sp_outline.add_argument("--input","-i",required=True,help="大纲CSV/XLSX/DOCX/PDF/TXT")
+    sp_outline.add_argument("--out","-o",default=str(Path(__file__).resolve().parent),help="目录清单保存位置")
+    sp_outline.set_defaults(func=cmd_import_outline)
     return p
 
 
