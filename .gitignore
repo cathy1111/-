@@ -22,3 +22,9 @@ offline-package.zip
 /outline_catalog.csv
 /outline_catalog.previous.csv
 /outline_import_report.txt
+
+# Vehicle-specific business catalogs and generated PDF examples stay local
+/outlines/
+/examples/multi_vehicle/
+/outline_catalog_extraction_review.csv
+/outline_catalog_import_report.txt
