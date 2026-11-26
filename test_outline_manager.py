@@ -58,6 +58,14 @@ class ManagerTests(unittest.TestCase):
             self.assertFalse((root/'outlines/vehicle_A.csv').exists())
             self.assertTrue((root/'outlines/vehicle_B.csv').exists())
             self.assertEqual((events[-1]['successes'],events[-1]['failures']),(1,1))
+    def test_incomplete_catalog_is_not_reported_as_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'outlines';folder.mkdir();path=folder/'vehicle_C.csv'
+            path.write_text('broken header\nvalue',encoding='utf-8')
+            self.assertNotIn('已导入',backend.existing_catalog_status(root,'C'))
+            path.write_text('大纲序号,科目名称\n1.3,',encoding='utf-8')
+            self.assertNotIn('已导入',backend.existing_catalog_status(root,'C'))
+
     def test_single_instance_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
             first=backend.InstanceLock(Path(tmp)/'lock');second=backend.InstanceLock(Path(tmp)/'lock')
