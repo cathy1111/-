@@ -1,4 +1,4 @@
-# Windows 7 SP1 64位离线便携兼容试用版 V1.6.1
+# Windows 7 SP1 64位离线便携兼容试用版 V1.6.2
 
 本包面向 Windows 7 企业版/专业版 SP1 64位；不是32位版，不支持未安装SP1的Win7。
 不需要预装Python；不需要联网识别。与Win10版使用不同OCR运行组件，不能混用runtime/soft目录。
@@ -26,3 +26,6 @@ Python 3.8仍依赖Windows 7 SP1及系统Universal CRT等基础组件。
 程序目录logs/startup-check.txt和logs/compatibility-check.json记录启动/环境情况。
 若Python无法启动，JSON可能不会生成，请保留屏幕错误及startup-check.txt。
 手写车号、日期、地点、科目序号必须人工核对。示例生成的大纲带“示例”前缀，不能用于正式编号。
+
+## V1.6.2修正
+本版仅改进原有识别归档，不含规范检查窗口。加入河北官厅已确认误读词典、地点核对截图、逐页进度落盘、暂停及恢复、千页流程测试和安全导出。详见SCALE_LOCATION_FIX.md。
