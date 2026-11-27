@@ -20,24 +20,32 @@ REVERSE={v:k for k,v in LABELS.items()}
 class AuditManager:
     def __init__(self,root):
         self.root=root;self.pdf=None;self.page=0;self.pages=0;self.fields=[];self.pending=None;self.profile_path=None;self.dirty=False;self.busy=False;self.events=queue.Queue();self.ratio=1;self.rotation=0
-        root.title('原始记录规范辅助检查');root.geometry('1280x900');root.minsize(1000,760);root.protocol('WM_DELETE_WINDOW',self.close)
+        root.title('原始记录规范辅助检查');root.geometry(f'{min(1280,root.winfo_screenwidth()-40)}x{min(900,root.winfo_screenheight()-80)}');root.minsize(980,620);root.protocol('WM_DELETE_WINDOW',self.close)
         top=ttk.Frame(root,padding=10);top.pack(fill='x')
         ttk.Button(top,text='选择PDF样张/待检查PDF',command=self.pick_pdf).pack(side='left',padx=3)
         ttk.Button(top,text='上一页',command=lambda:self.turn(-1)).pack(side='left',padx=3)
         ttk.Button(top,text='下一页',command=lambda:self.turn(1)).pack(side='left',padx=3)
         ttk.Button(top,text='载入检查模板',command=self.load_rules).pack(side='left',padx=3)
         ttk.Button(top,text='保存检查模板',command=self.save_rules).pack(side='left',padx=3)
+        ttk.Button(top,text='新建模板',command=self.new_rules).pack(side='left',padx=3)
         ttk.Button(top,text='打开示例',command=self.demo).pack(side='left',padx=3)
         self.file_label=ttk.Label(top,text='未选择PDF');self.file_label.pack(side='left',padx=10)
         ttk.Label(root,text='先载入模板，或在样张上拖框设置检查区。只框填写内容，不含“签字/数值”等标签和表格边框。不同版式请建立不同模板。').pack(anchor='w',padx=12)
         content=ttk.Frame(root,padding=10);content.pack(fill='both',expand=True)
         left=ttk.Frame(content);left.pack(side='left',fill='both',expand=True)
         self.canvas=tk.Canvas(left,bg='#d5d5d5',width=700,height=700)
+        horizontal=ttk.Scrollbar(left,orient='horizontal',command=self.canvas.xview);self.canvas.configure(xscrollcommand=horizontal.set);horizontal.pack(side='bottom',fill='x')
         scroll=ttk.Scrollbar(left,orient='vertical',command=self.canvas.yview);self.canvas.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right',fill='y');self.canvas.pack(side='left',fill='both',expand=True)
         self.canvas.bind('<ButtonPress-1>',self.begin);self.canvas.bind('<B1-Motion>',self.drag);self.canvas.bind('<ButtonRelease-1>',self.end)
         self.canvas.bind('<MouseWheel>',lambda e:self.canvas.yview_scroll(int(-e.delta/120),'units'))
-        side=ttk.Frame(content,width=450,padding=(12,0));side.pack(side='right',fill='y')
+        right=ttk.Frame(content,width=450);right.pack(side='right',fill='y')
+        rule_canvas=tk.Canvas(right,width=430,highlightthickness=0)
+        rule_scroll=ttk.Scrollbar(right,orient='vertical',command=rule_canvas.yview);rule_canvas.configure(yscrollcommand=rule_scroll.set)
+        rule_scroll.pack(side='right',fill='y');rule_canvas.pack(side='left',fill='both',expand=True)
+        side=ttk.Frame(rule_canvas,padding=(12,0));rule_window=rule_canvas.create_window((0,0),window=side,anchor='nw')
+        side.bind('<Configure>',lambda e:rule_canvas.configure(scrollregion=rule_canvas.bbox('all')))
+        rule_canvas.bind('<Configure>',lambda e:rule_canvas.itemconfigure(rule_window,width=e.width))
         self.name=tk.StringVar(value='新检查模板');self.title=tk.StringVar();self.basis=tk.StringVar();self.example=tk.BooleanVar(value=False)
         for label,var in [('模板名称',self.name),('适用表单标题（建议填写）',self.title),('检查依据/规范条款（必填）',self.basis)]:
             ttk.Label(side,text=label).pack(anchor='w');ttk.Entry(side,textvariable=var,width=48).pack(fill='x',pady=(0,5));var.trace_add('write',self.changed)
@@ -123,6 +131,11 @@ class AuditManager:
         if self.busy:return
         for i in sorted([int(x) for x in self.tree.selection()],reverse=True):self.fields.pop(i)
         self.dirty=True;self.refresh()
+    def new_rules(self):
+        if self.busy or not self.ask_discard():return
+        self.fields=[];self.name.set('新检查模板');self.title.set('');self.basis.set('');self.example.set(False)
+        self.template_ratio=self.ratio;self.template_rotation=self.rotation;self.pending=None;self.profile_path=None;self.dirty=False;self.refresh()
+        self.status.set('新模板：选择真实样张，填写规范依据，再框选需要检查的填写区。')
     def load_rules(self,path=None):
         if self.busy or not self.ask_discard():return
         path=path or filedialog.askopenfilename(initialdir=str(ROOT/'audit_rules'),filetypes=[('检查模板JSON','*.json')])
