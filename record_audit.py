@@ -43,11 +43,16 @@ def validate(profile):
 def numeric_result(text,confidence,field):
     text=unicodedata.normalize('NFKC',text).strip().replace('−','-').replace('，',',')
     matches=re.findall(r'(?<![\d.])[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?![\d.])',text)
-    if len(matches)!=1 or not math.isfinite(confidence) or not .90<=confidence<=1:return '待人工复核','数值未唯一识别或OCR置信度不足；不能据此判定填写精度'
+    if len(matches)!=1 or not math.isfinite(confidence) or not 0<=confidence<=1:return '待人工复核','数值未唯一识别或OCR置信度不足；不能据此判定填写精度'
     raw=matches[0];value=Decimal(raw);step=positive_decimal(field['increment'])
     decimals=max(0,-step.normalize().as_tuple().exponent)
     written=len(raw.split('.')[1]) if '.' in raw else 0
-    if written!=decimals or value%step!=0:
+    mismatch=written!=decimals or value%step!=0
+    if confidence<.90:
+        detail='OCR置信度不足，须先核对识别值'
+        if mismatch:detail+=f'；候选{raw}与要求步长{step}、小数位{decimals}不符，但不能据此认定填写错误'
+        return '待人工复核',detail
+    if mismatch:
         return '疑似填写格式不符',f'识别为{raw}，要求步长{step}、小数位{decimals}；请核对原图及填写规范'
     return '未发现格式问题',f'识别值满足配置的步长{step}、小数位{decimals}；仍需确认OCR和规则适用性'
 
