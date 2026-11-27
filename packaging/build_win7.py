@@ -65,7 +65,7 @@ def build():
     # Use the engine's own legacy VC DLLs when included, never builder VS2022 DLLs.
     for dll in engine.rglob('*.dll'):
         if dll.name.lower().startswith(('msvcp140','vcruntime140','vcomp140')) and not (runtime/dll.name).exists():shutil.copy2(dll,runtime/dll.name)
-    script='@echo off\r\nsetlocal\r\ncd /d "%~dp0"\r\nif not exist logs mkdir logs\r\n"%~dp0runtime\\python.exe" "%~dp0win7_diagnostics.py" > "%~dp0logs\\startup-check.txt" 2>&1\r\nif errorlevel 1 goto failed\r\nstart "" "%~dp0runtime\\pythonw.exe" "%~dp0desktop_app.py"\r\nexit /b\r\n:failed\r\necho Compatibility check failed. See logs\\startup-check.txt.\r\necho Windows 7 SP1 x64 and approved Universal CRT prerequisites are required.\r\npause\r\n'
+    script='@echo off\r\nsetlocal\r\ncd /d "%~dp0"\r\nif not exist logs mkdir logs\r\n"%~dp0runtime\\python.exe" "%~dp0win7_diagnostics.py" > "%~dp0logs\\startup-check.txt" 2>&1\r\nif not "%errorlevel%"=="0" goto failed\r\nstart "" "%~dp0runtime\\pythonw.exe" "%~dp0desktop_app.py"\r\nexit /b\r\n:failed\r\necho Compatibility check failed. See logs\\startup-check.txt.\r\necho Windows 7 SP1 x64 and approved Universal CRT prerequisites are required.\r\npause\r\n'
     (payload/'Start.bat').write_bytes(script.encode('ascii'));(payload/'启动软件.bat').write_bytes(script.encode('ascii'))
     check='@echo off\r\ncd /d "%~dp0"\r\n"%~dp0runtime\\python.exe" "%~dp0win7_diagnostics.py"\r\npause\r\n';(payload/'检查运行环境.bat').write_bytes(check.encode('ascii'))
     for src in ['WIN7_GUIDE.md','WIN7_TEST_SCOPE.md']:shutil.copy2(ROOT/'packaging'/src,payload/src)
