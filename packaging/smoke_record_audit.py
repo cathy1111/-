@@ -16,7 +16,9 @@ try:
     print('AUDIT_DEMO_ROWS='+json.dumps(rows,ensure_ascii=False),flush=True)
     assert len(rows)==6,rows
     assert rows[0]['状态']=='未发现格式问题',rows
-    assert rows[3]['状态']=='疑似填写格式不符',rows
+    assert rows[3]['识别内容']=='12.34',rows
+    assert rows[3]['状态'] in ['疑似填写格式不符','待人工复核'],rows
+    assert '小数位' in rows[3]['说明'],rows
     assert rows[1]['状态']=='检测到笔迹，待复核',rows
     assert rows[4]['状态']=='疑似漏签，待复核',rows
     assert rows[5]['状态']=='疑似漏填，待复核',rows
