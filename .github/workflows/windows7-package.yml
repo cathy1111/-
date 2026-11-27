@@ -2,7 +2,7 @@ name: Build fresh-PC Windows7 SP1 compatibility trial
 on:
   push:
     branches: [compat/windows7]
-    paths: ['.github/workflows/windows7-package.yml', 'packaging/build_win7.py', 'packaging/smoke_win7.py', 'packaging/requirements-win7.txt', 'legacy_ocr.py', 'win7_diagnostics.py', 'outline_migration.py', 'test_outline_migration.py', 'desktop_app.py', 'packaging/WIN7*.md']
+    paths: ['.github/workflows/windows7-package.yml', 'packaging/build_win7.py', 'packaging/smoke_win7.py', 'packaging/requirements-win7.txt', 'legacy_ocr.py', 'win7_diagnostics.py', 'outline_migration.py', 'test_outline_migration.py', 'desktop_app.py', 'packaging/WIN7*.md', 'record_audit.py', 'audit_manager.py', 'audit_demo.py', 'test_record_audit.py', 'packaging/smoke_record_audit.py']
   workflow_dispatch:
 permissions:
   contents: write
@@ -16,7 +16,7 @@ jobs:
     env:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
-      RELEASE_TAG: v1.6.1-win7-trial-${{ github.run_id }}-${{ github.run_attempt }}
+      RELEASE_TAG: v1.7.0-win7-trial-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,6 +62,8 @@ jobs:
           }
           try {
             & $python packaging/smoke_win7.py $target
+            if ($LASTEXITCODE -ne 0) { throw 'Legacy OCR smoke failed' }
+            & $python packaging/smoke_record_audit.py $target
             $code=$LASTEXITCODE
           } finally {
             0..2 | ForEach-Object { Remove-NetFirewallRule -DisplayName "Win7TrialSmoke$_" -ErrorAction SilentlyContinue }
@@ -86,5 +88,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:RELEASE_TAG dist/TrialRecords-Win7-SP1-x64-Portable-Trial.zip dist/SHA256SUMS-Win7.txt --target '${{ github.sha }}' --prerelease --title 'V1.6.1 Windows7 SP1 x64 - Compatibility Trial' --notes-file packaging/WIN7_GUIDE.md
+          gh release create $env:RELEASE_TAG dist/TrialRecords-Win7-SP1-x64-Portable-Trial.zip dist/SHA256SUMS-Win7.txt --target '${{ github.sha }}' --prerelease --title 'V1.7.0 Record Audit - Windows7 SP1 x64 - Compatibility Trial' --notes-file packaging/WIN7_GUIDE.md
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
