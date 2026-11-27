@@ -1,0 +1,90 @@
+name: Build Windows7 SP1 compatibility trial
+on:
+  push:
+    branches: [compat/windows7]
+    paths: ['.github/workflows/windows7-package.yml', 'packaging/build_win7.py', 'packaging/smoke_win7.py', 'packaging/requirements-win7.txt', 'legacy_ocr.py', 'win7_diagnostics.py']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: trial-records-win7
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      RELEASE_TAG: v1.6.1-win7-trial-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8.10'
+          architecture: x64
+      - name: Build clean Python38 environment
+        shell: pwsh
+        run: |
+          python -m venv .win7-env
+          & .win7-env/Scripts/python.exe -m pip install pip==24.3.1 setuptools==65.5.0 wheel==0.45.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .win7-env/Scripts/python.exe -m pip install --only-binary=PyMuPDF,numpy,Pillow,lxml -r packaging/requirements-win7.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run rule and document regressions
+        shell: pwsh
+        run: |
+          & .win7-env/Scripts/python.exe -m unittest discover -p 'test_*.py' -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build legacy runtime and verified Win7 OCR component
+        shell: pwsh
+        run: |
+          & .win7-env/Scripts/python.exe packaging/build_win7.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test relocated legacy runtime with network blocked
+        shell: pwsh
+        run: |
+          $source=Join-Path $PWD 'dist\TrialRecords-Win7'
+          $target=Join-Path $PWD 'relocated\TrialRecords-Win7'
+          New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+          Move-Item $source $target
+          $python=Join-Path $target 'runtime\python.exe'
+          $pythonw=Join-Path $target 'runtime\pythonw.exe'
+          $spec=Get-Content "$target\legacy_engine.json" -Raw | ConvertFrom-Json
+          $engine=Join-Path $target $spec.executable
+          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
+          $i=0
+          foreach ($exe in @($python,$pythonw,$engine)) {
+            New-NetFirewallRule -DisplayName "Win7TrialSmoke$i" -Direction Outbound -Program $exe -Action Block -Profile Any | Out-Null
+            $i++
+          }
+          try {
+            & $python packaging/smoke_win7.py $target
+            $code=$LASTEXITCODE
+          } finally {
+            0..2 | ForEach-Object { Remove-NetFirewallRule -DisplayName "Win7TrialSmoke$_" -ErrorAction SilentlyContinue }
+            Move-Item $target $source
+          }
+          if ($code -ne 0) { throw 'Legacy payload functional smoke failed' }
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          & .win7-env/Scripts/python.exe packaging/build_win7.py --package-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TrialRecords-Win7-Compatibility-Trial
+          path: |
+            dist/TrialRecords-Win7-SP1-x64-Portable-Trial.zip
+            dist/SHA256SUMS-Win7.txt
+          compression-level: 0
+          if-no-files-found: error
+      - name: Publish compatibility trial with explicit untested Win7 scope
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:RELEASE_TAG dist/TrialRecords-Win7-SP1-x64-Portable-Trial.zip dist/SHA256SUMS-Win7.txt --target '${{ github.sha }}' --prerelease --title 'V1.6.1 Windows7 SP1 x64 - Compatibility Trial' --notes-file packaging/WIN7_GUIDE.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
