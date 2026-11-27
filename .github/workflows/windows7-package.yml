@@ -2,7 +2,7 @@ name: Build Windows7 SP1 compatibility trial
 on:
   push:
     branches: [compat/windows7]
-    paths: ['.github/workflows/windows7-package.yml', 'packaging/build_win7.py', 'packaging/smoke_win7.py', 'packaging/requirements-win7.txt', 'legacy_ocr.py', 'win7_diagnostics.py']
+    paths: ['.github/workflows/windows7-package.yml', 'packaging/build_win7.py', 'packaging/smoke_win7.py', 'packaging/requirements-win7.txt', 'legacy_ocr.py', 'win7_diagnostics.py', 'packaging/WIN7*.md']
   workflow_dispatch:
 permissions:
   contents: write
