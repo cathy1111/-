@@ -79,7 +79,37 @@ def package():
     import runpy
     generate_demo=runpy.run_path(str(ROOT/'demo_vehicle_data.py'))['generate_demo']
     generate_demo(payload/'examples/multi_vehicle')
-    (payload/'examples/multi_vehicle/README.txt').write_text('全部为示例，不是真实业务资料。\n打开软件主窗口，点击①管理车辆大纲，批量选择full_outlines内A至F示例PDF并确认车辆后导入。\n返回主窗口选择mixed_vehicle_records_scan.pdf，识别生成预览，核对保存关闭后点击导出PDF。\n正式使用时在界面导入真实大纲，示例编号不能用于正式归档。\n',encoding='utf-8-sig')
+    for car in 'ABCDEF':
+        subprocess.run([str(payload/'runtime/python.exe'),str(payload/'split_experiments.py'),'import-outline','--vehicle',car,
+            '--input',str(payload/'examples/multi_vehicle/full_outlines'/(car+'_outline.pdf')),'--out',str(payload)],check=True)
+    verification = """
+from pathlib import Path
+from argparse import Namespace
+import tempfile,shutil
+import vehicle_outlines as vo
+import outline_catalog as oc
+from split_experiments import cmd_import_outline
+root=Path.cwd()
+bank=vo.VehicleBank.load(root/'outlines')
+assert set(bank.catalogs)==set('ABCDEF')
+assert all(c.example and len(c.entries)==3 for c in bank.catalogs.values())
+with tempfile.TemporaryDirectory() as temp:
+    folder=Path(temp)
+    shutil.copytree(root/'outlines',folder/'outlines')
+    real=folder/'real_A.csv'
+    real.write_text('大纲序号,科目名称'+chr(10)+'9.1,加速性能试验记录表'+chr(10),encoding='utf-8-sig')
+    cmd_import_outline(Namespace(input=str(real),out=str(folder),vehicle='A'))
+    replaced=vo.VehicleBank.load(folder/'outlines')
+    a=replaced.select('A204')[1];b=replaced.select('B101')[1]
+    assert not a.example and b.example
+    assert a.match('加速性能试验记录表').number=='9.1'
+    assert not oc.prefix_filename('记录','9.1',True,a.example).startswith('示例')
+    assert oc.prefix_filename('记录','2.3',True,b.example).startswith('示例')
+print('PRELOADED_OUTLINES_AND_REAL_REPLACEMENT: PASS')
+"""
+    subprocess.run([str(payload/'runtime/python.exe'),'-c',verification],cwd=str(payload),check=True)
+
+    (payload/'examples/multi_vehicle/README.txt').write_text('全部为示例，不是真实业务资料。\nA至F示例大纲已预先导入，无需手动导入示例。\n返回主窗口选择mixed_vehicle_records_scan.pdf，识别生成预览，核对保存关闭后点击导出PDF。\n正式使用时在界面导入真实大纲，示例编号不能用于正式归档。\n',encoding='utf-8-sig')
     with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED) as z:
         for p in payload.rglob('*'):
             if p.is_file():z.write(p,'TrialRecords-Win7/'+p.relative_to(payload).as_posix())
