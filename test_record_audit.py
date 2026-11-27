@@ -16,6 +16,8 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(numeric_result('12.30',.99,field)[0],'疑似填写格式不符')
         self.assertEqual(numeric_result('12.3',.6,field)[0],'待人工复核')
         self.assertEqual(numeric_result('1 2.3',.99,field)[0],'待人工复核')
+        status,detail=numeric_result('12.34',.84,field)
+        self.assertEqual(status,'待人工复核');self.assertIn('小数位',detail)
         self.assertEqual(numeric_result('1.3',.99,{'increment':'.5'})[0],'疑似填写格式不符')
     def test_blank_form_lines_are_not_signatures(self):
         image=Image.new('RGB',(300,80),'white');draw=ImageDraw.Draw(image);draw.rectangle((0,0,299,79),outline='black',width=2);draw.line((0,60,299,60),fill='black',width=1)
