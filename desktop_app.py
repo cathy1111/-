@@ -23,6 +23,7 @@ class DesktopApp:
         ttk.Label(frame,text='本地OCR · 分车大纲 · 先核对后导出 · 运行无需联网').pack(anchor='w',pady=(6,16))
         buttons=ttk.Frame(frame);buttons.pack(fill='x')
         self.outline_button=ttk.Button(buttons,text='① 管理车辆大纲',command=self.outlines);self.outline_button.pack(side='left',padx=4)
+        self.audit_button=ttk.Button(buttons,text='记录规范检查',command=self.audits);self.audit_button.pack(side='left',padx=4)
         ttk.Button(buttons,text='生成示例资料',command=lambda:self.run('demo')).pack(side='left',padx=4)
         ttk.Button(buttons,text='打开输出目录',command=self.open_out).pack(side='left',padx=4)
         ttk.Label(frame,text='② 选择原始记录PDF（可包含多个车辆）').pack(anchor='w',pady=(22,5))
@@ -47,6 +48,10 @@ class DesktopApp:
     def outlines(self):
         exe=Path(worker_interpreter());windowed=exe.with_name('pythonw.exe') if os.name=='nt' else exe
         subprocess.Popen([str(windowed if windowed.exists() else exe),str(ROOT/'outline_manager.py')],cwd=str(ROOT))
+    def audits(self):
+        if self.busy:return
+        exe=Path(worker_interpreter());windowed=exe.with_name('pythonw.exe') if os.name=='nt' else exe
+        subprocess.Popen([str(windowed if windowed.exists() else exe),str(ROOT/'audit_manager.py')],cwd=str(ROOT))
     def pick(self):
         value=filedialog.askopenfilename(title='选择原始记录PDF',filetypes=[('PDF','*.pdf')])
         if value:
@@ -64,7 +69,7 @@ class DesktopApp:
         args=[worker_interpreter(),str(ROOT/'split_experiments.py')]
         if mode=='demo':args+=['make-demo','--out',str(ROOT/'examples/multi_vehicle')]
         else:args+=[mode,'--input',self.path.get(),'--out',str(ROOT/'out'),'--version','V011']
-        self.busy=True;self.preview.configure(state='disabled');self.export.configure(state='disabled');self.choose.configure(state='disabled');self.outline_button.configure(state='disabled');self.progress.start(15)
+        self.busy=True;self.preview.configure(state='disabled');self.export.configure(state='disabled');self.choose.configure(state='disabled');self.outline_button.configure(state='disabled');self.audit_button.configure(state='disabled');self.progress.start(15)
         self.status.set('正在处理，请稍候。关闭前请等当前任务完成。')
         def worker():
             try:
@@ -83,7 +88,7 @@ class DesktopApp:
                     self.log.configure(state='normal');self.log.insert('end',value);self.log.see('end');self.log.configure(state='disabled');logging.info(value.rstrip())
                 else:
                     self.busy=False;self.progress.stop()
-                    for button in [self.preview,self.export,self.choose,self.outline_button]:button.configure(state='normal')
+                    for button in [self.preview,self.export,self.choose,self.outline_button,self.audit_button]:button.configure(state='normal')
                     code,mode=value
                     self.status.set('处理失败，请查看上方错误信息。' if code else ('预览已生成：请打开清单核对，保存关闭后再导出。' if mode=='preview' else '处理完成，请打开输出目录或示例目录查看。'))
         except queue.Empty:pass
