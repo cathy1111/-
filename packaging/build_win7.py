@@ -79,6 +79,7 @@ def package():
     import runpy
     generate_demo=runpy.run_path(str(ROOT/'demo_vehicle_data.py'))['generate_demo']
     generate_demo(payload/'examples/multi_vehicle')
+    (payload/'examples/multi_vehicle/README.txt').write_text('全部为示例，不是真实业务资料。\n打开软件主窗口，点击①管理车辆大纲，批量选择full_outlines内A至F示例PDF并确认车辆后导入。\n返回主窗口选择mixed_vehicle_records_scan.pdf，识别生成预览，核对保存关闭后点击导出PDF。\n正式使用时在界面导入真实大纲，示例编号不能用于正式归档。\n',encoding='utf-8-sig')
     with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED) as z:
         for p in payload.rglob('*'):
             if p.is_file():z.write(p,'TrialRecords-Win7/'+p.relative_to(payload).as_posix())
