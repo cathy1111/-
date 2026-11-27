@@ -1,4 +1,4 @@
-name: Build Windows7 SP1 compatibility trial
+name: Build fresh-PC Windows7 SP1 compatibility trial
 on:
   push:
     branches: [compat/windows7]
