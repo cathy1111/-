@@ -1,4 +1,4 @@
-# Windows 7 SP1 64位离线便携兼容试用版 V1.6.1
+# Windows 7 SP1 64位离线便携兼容试用版 V1.7.0
 
 本包面向 Windows 7 企业版/专业版 SP1 64位；不是32位版，不支持未安装SP1的Win7。
 不需要预装Python；不需要联网识别。与Win10版使用不同OCR运行组件，不能混用runtime/soft目录。
@@ -26,3 +26,6 @@ Python 3.8仍依赖Windows 7 SP1及系统Universal CRT等基础组件。
 程序目录logs/startup-check.txt和logs/compatibility-check.json记录启动/环境情况。
 若Python无法启动，JSON可能不会生成，请保留屏幕错误及startup-check.txt。
 手写车号、日期、地点、科目序号必须人工核对。示例生成的大纲带“示例”前缀，不能用于正式编号。
+
+## 新增记录规范辅助检查
+主窗口点击“记录规范检查”。已内置两页扫描示例及规则，点击“打开示例”即可验证数值位数、签字栏和必填栏检查。真实记录需按实际版式框选填写区域、配置正式规则和设备参数。详细步骤见RECORD_AUDIT_GUIDE.md。输出证据报告供人工核验，不作最终合格判定。
