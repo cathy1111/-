@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parent.parent
 ENGINE_URL='https://github.com/hiroi-sora/RapidOCR-json/releases/download/v0.2.0/RapidOCR-json_v0.2.0.7z'
 ENGINE_SHA='7ad9b283d03436c6cd0296723188699299cb4e5cf9140b410c59543aa5793c40'
-FILES=['desktop_app.py','outline_manager.py','outline_manager_backend.py','split_experiments.py','outline_catalog.py','vehicle_outlines.py','full_outline_pdf.py','demo_vehicle_data.py','field_rules.json','legacy_ocr.py','win7_diagnostics.py']
+FILES=['desktop_app.py','outline_manager.py','outline_manager_backend.py','split_experiments.py','outline_catalog.py','vehicle_outlines.py','full_outline_pdf.py','demo_vehicle_data.py','field_rules.json','legacy_ocr.py','win7_diagnostics.py','outline_migration.py']
 
 def digest(path):
     h=hashlib.sha256()
