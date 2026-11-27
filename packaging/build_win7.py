@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parent.parent
 ENGINE_URL='https://github.com/hiroi-sora/RapidOCR-json/releases/download/v0.2.0/RapidOCR-json_v0.2.0.7z'
 ENGINE_SHA='7ad9b283d03436c6cd0296723188699299cb4e5cf9140b410c59543aa5793c40'
-FILES=['desktop_app.py','outline_manager.py','outline_manager_backend.py','split_experiments.py','outline_catalog.py','vehicle_outlines.py','full_outline_pdf.py','demo_vehicle_data.py','field_rules.json','legacy_ocr.py','win7_diagnostics.py','outline_migration.py']
+FILES=['desktop_app.py','outline_manager.py','outline_manager_backend.py','split_experiments.py','outline_catalog.py','vehicle_outlines.py','full_outline_pdf.py','demo_vehicle_data.py','field_rules.json','legacy_ocr.py','win7_diagnostics.py']
 
 def digest(path):
     h=hashlib.sha256()
@@ -76,6 +76,8 @@ def build():
 
 def package():
     payload=ROOT/'dist/TrialRecords-Win7';target=ROOT/'dist/TrialRecords-Win7-SP1-x64-Portable-Trial.zip'
+    from demo_vehicle_data import generate_demo
+    generate_demo(payload/'examples/multi_vehicle')
     with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED) as z:
         for p in payload.rglob('*'):
             if p.is_file():z.write(p,'TrialRecords-Win7/'+p.relative_to(payload).as_posix())
