@@ -704,8 +704,11 @@ def scan_pdf(pdf_path,top_ratio=0.4,max_pages=None,debug_dir=None,resume_dir=Non
             if checkpoint and i<len(checkpoint.rows):
                 meta=PageMeta(**checkpoint.rows[i])
             else:
-                meta=scan_one_page(doc[i],i,top_ratio,debug_dir,rules,places)
-                if checkpoint:checkpoint.append(asdict(meta))
+                try:
+                    meta=scan_one_page(doc[i],i,top_ratio,debug_dir,rules,places)
+                    if checkpoint:checkpoint.append(asdict(meta))
+                except Exception as exc:
+                    raise RuntimeError(f'第{i+1}页识别或保存失败；已完成页可恢复。原错误：{exc}') from exc
                 processed+=1
             metas.append(meta)
             print(f'  [{i+1}/{n}] {meta.filename_base}  ({meta.note})',flush=True)
@@ -1002,6 +1005,9 @@ def cmd_preview(args: argparse.Namespace) -> int:
     write_outline_identity(out_dir,catalog)
 
     marker.unlink()
+    corrected=sum('已确认地点误读修正' in m.note for m in metas)
+    pending=sum('地点未列入' in m.note or '地点待核对' in m.note for m in metas)
+    print(f'地点自动纠正{corrected}页，仍待核对{pending}页；请核对preview.csv的地点、原始地点及备注列。',flush=True)
     groups = [(m, [m.page_index]) for m in metas]
     print(f"\n预计拆成 {len(groups)} 个实验文件（版本 {version}）：")
     for meta, pages in groups:
