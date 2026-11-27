@@ -76,7 +76,8 @@ def build():
 
 def package():
     payload=ROOT/'dist/TrialRecords-Win7';target=ROOT/'dist/TrialRecords-Win7-SP1-x64-Portable-Trial.zip'
-    from demo_vehicle_data import generate_demo
+    import runpy
+    generate_demo=runpy.run_path(str(ROOT/'demo_vehicle_data.py'))['generate_demo']
     generate_demo(payload/'examples/multi_vehicle')
     with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED) as z:
         for p in payload.rglob('*'):
