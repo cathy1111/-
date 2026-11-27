@@ -14,7 +14,7 @@ def hash_file(path):
 def encode(value):return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')
 
 def identity(pdf,ratio,root):
-    root=Path(root);files=['split_experiments.py','legacy_ocr.py','field_rules.json','locations.csv','location_catalog.py','legacy_engine.json']
+    root=Path(root);files=['scan_checkpoint.py','split_experiments.py','legacy_ocr.py','field_rules.json','locations.csv','location_catalog.py','legacy_engine.json']
     config=root/'legacy_engine.json'
     if config.is_file():
         spec=json.loads(config.read_text(encoding='utf-8'));exe=root/spec['executable'];files.append(str(exe))
