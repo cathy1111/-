@@ -21,7 +21,7 @@ import outline_catalog as outlines
 import vehicle_outlines as vehicle_catalogs
 
 _OCR = None
-PROGRAM_VERSION = "1.6.0"
+PROGRAM_VERSION = "1.6.2"
 
 TIME_RE = re.compile(
     r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*\D{0,4}日"
@@ -51,6 +51,7 @@ class PageMeta:
     outline_example: bool = False
     outline_vehicle: str = ""
     outline_source: str = ""
+    place_evidence: str = ""
 
 
 def get_ocr():
@@ -361,6 +362,7 @@ def field_from_boxes(boxes, label_pattern, parse):
 
 def parse_place_value(text):
     text=compact_text(text).strip(":：,，;；.。|[]()（）")
+    if text in {"未知","未填写","不详","无","N/A","NULL"}:return ""
     # A unit or a weather measurement must never become a trial location.
     if re.search(r"℃|°|天气|温度|湿度|风力|海拔|气象条件|M/S|KM/H|%",text):return ""
     chinese=re.findall(r"[\u4e00-\u9fff]",text)
@@ -593,94 +595,126 @@ def verify_preview_identity(pdf_path: Path, out_dir: Path):
     return actual['pages']
 
 
-def scan_pdf(
-    pdf_path: Path,
-    top_ratio: float = 0.4,
-    max_pages: Optional[int] = None,
-    debug_dir: Optional[Path] = None,
-) -> List[PageMeta]:
-    doc = fitz.open(pdf_path)
-    n = doc.page_count if max_pages is None else min(doc.page_count, max_pages)
-    metas: List[PageMeta] = []
-    prev: Optional[PageMeta] = None
-    confirmed_rules = load_confirmed_rules()
+def save_place_evidence(page,boxes,debug_dir,index):
+    if debug_dir is None:return ''
+    anchors=[b for b in boxes if PLACE_LABEL.search(compact_text(b.text))]
+    if not anchors:return ''
+    anchor=anchors[0];height=max(anchor.y1-anchor.y0,1);right=min(page.rect.width*2.5,anchor.x1+22*height)
+    center=(anchor.y0+anchor.y1)/2
+    for other in boxes:
+        if other.x0>anchor.x1 and ALL_FIELD_LABELS.search(compact_text(other.text)) and abs((other.y0+other.y1)/2-center)<=height*1.3:right=min(right,other.x0)
+    rect=fitz.Rect(max(0,anchor.x0)/2.5,max(0,anchor.y0-height*.4)/2.5,right/2.5,(anchor.y1+height*.7)/2.5)&page.rect
+    if rect.is_empty:return ''
+    folder=Path(debug_dir);folder.mkdir(exist_ok=True,parents=True);path=folder/f'page-{index+1:04d}-place.png'
+    page.get_pixmap(matrix=fitz.Matrix(3,3),clip=rect,alpha=False).save(str(path))
+    return folder.name+'/'+path.name
 
-    print(f"共 {doc.page_count} 页，将处理前 {n} 页 …", flush=True)
-    for i in range(n):
-        page = doc[i]
-        png = render_top_crop(page, top_ratio=top_ratio)
-        boxes = ocr_boxes(png)
-        texts = [(b.text,b.confidence) for b in boxes]
-        experiment, _, time_disp, time_code, loc_s, note = extract_fields(texts)
-        # Use labelled metadata from both regions. An annex may carry all of its
-        # date/place/vehicle fields at the bottom instead of in the header.
+
+def scan_one_page(page,i,top_ratio,debug_dir,confirmed_rules,place_dictionary):
+    png = render_top_crop(page, top_ratio=top_ratio)
+    boxes = ocr_boxes(png)
+    texts = [(b.text,b.confidence) for b in boxes]
+    experiment, _, time_disp, time_code, loc_s, note = extract_fields(texts)
+    # Use labelled metadata from both regions. An annex may carry all of its
+    # date/place/vehicle fields at the bottom instead of in the header.
+    parsed_date = field_from_boxes(boxes, DATE_LABEL, normalized_date_value)
+    parsed_place = field_from_boxes(boxes, PLACE_LABEL, parse_place_value)
+    vehicle = vehicle_from_boxes(boxes)
+    if not all([vehicle, parsed_date, parsed_place]):
+        footer, footer_png = ocr_footer(page)
+        boxes += footer
+        if debug_dir is not None:
+            debug_dir.mkdir(parents=True,exist_ok=True)
+            (debug_dir/f"page-{i+1:04d}-footer.png").write_bytes(footer_png)
         parsed_date = field_from_boxes(boxes, DATE_LABEL, normalized_date_value)
         parsed_place = field_from_boxes(boxes, PLACE_LABEL, parse_place_value)
         vehicle = vehicle_from_boxes(boxes)
-        if not all([vehicle, parsed_date, parsed_place]):
-            footer, footer_png = ocr_footer(page)
-            boxes += footer
-            if debug_dir is not None:
-                debug_dir.mkdir(parents=True,exist_ok=True)
-                (debug_dir/f"page-{i+1:04d}-footer.png").write_bytes(footer_png)
-            parsed_date = field_from_boxes(boxes, DATE_LABEL, normalized_date_value)
-            parsed_place = field_from_boxes(boxes, PLACE_LABEL, parse_place_value)
-            vehicle = vehicle_from_boxes(boxes)
-        # Discard flattened-text fallbacks: they can select a temperature unit
-        # or an instrument expiry date from the next row.
-        legacy_place=loc_s
-        if not parsed_date:
-            parsed_date=retry_labelled_field(page,boxes,DATE_LABEL,normalized_date_value,debug_dir,i,'date')
-        if not parsed_place:
-            parsed_place=retry_labelled_field(page,boxes,PLACE_LABEL,parse_place_value,debug_dir,i,'place')
-        time_code=parsed_date
-        time_disp=display_time(parsed_date[:4],parsed_date[4:6],parsed_date[6:8]) if parsed_date else ''
-        loc_s=parsed_place
-        vehicle_note = ""
-        if not vehicle:
-            print(f"  第{i+1}页车号未确定，正在放大复识别…",flush=True)
-            vehicle, vehicle_note = retry_vehicle(page, boxes, debug_dir, i)
-        vehicle_raw, location_ocr_raw = vehicle, loc_s or legacy_place
-        vehicle, loc_s, corrections = apply_confirmed_rules(experiment, vehicle, loc_s, confirmed_rules, page_fingerprint(page) if any(r.get("page_fingerprint") for r in confirmed_rules) else None)
-        notes = [part for part in note.split(";") if part and part not in {"车号未识别", "时间未识别", "地点未识别"}]
-        if not time_code:
-            notes.append("时间未识别")
-        if not loc_s:
-            notes.append("地点待核对：未从地点单元格读到有效地点")
-        if not vehicle:
-            notes.append("车号未识别")
-        if vehicle_note:
-            notes.append(vehicle_note)
-        notes.extend(corrections)
-        note = ";".join(notes)
+    # Discard flattened-text fallbacks: they can select a temperature unit
+    # or an instrument expiry date from the next row.
+    legacy_place=loc_s
+    if not parsed_date:
+        parsed_date=retry_labelled_field(page,boxes,DATE_LABEL,normalized_date_value,debug_dir,i,'date')
+    if not parsed_place:
+        parsed_place=retry_labelled_field(page,boxes,PLACE_LABEL,parse_place_value,debug_dir,i,'place')
+    time_code=parsed_date
+    time_disp=display_time(parsed_date[:4],parsed_date[4:6],parsed_date[6:8]) if parsed_date else ''
+    loc_s=parsed_place
+    vehicle_note = ""
+    if not vehicle:
+        print(f"  第{i+1}页车号未确定，正在放大复识别…",flush=True)
+        vehicle, vehicle_note = retry_vehicle(page, boxes, debug_dir, i)
+    vehicle_raw, location_ocr_raw = vehicle, loc_s or legacy_place
+    vehicle, loc_s, corrections = apply_confirmed_rules(experiment, vehicle, loc_s, confirmed_rules, page_fingerprint(page) if any(r.get("page_fingerprint") for r in confirmed_rules) else None)
+    from location_catalog import resolve
+    loc_s,place_note=resolve(loc_s,place_dictionary)
+    if place_note:corrections.append(place_note)
+    place_evidence=save_place_evidence(page,boxes,debug_dir,i) if place_note or not loc_s else ""
+    notes = [part for part in note.split(";") if part and part not in {"车号未识别", "时间未识别", "地点未识别"}]
+    if not time_code:
+        notes.append("时间未识别")
+    if not loc_s:
+        notes.append("地点待核对：未从地点单元格读到有效地点")
+    if not vehicle:
+        notes.append("车号未识别")
+    if vehicle_note:
+        notes.append(vehicle_note)
+    notes.extend(corrections)
+    note = ";".join(notes)
 
-        # Missing values remain unknown; never borrow fields from a different experiment.
-        group_key = "|".join([experiment, vehicle, time_code, loc_s]) if all([experiment, vehicle, time_code, loc_s]) else f"未识别_p{i+1}"
+    # Missing values remain unknown; never borrow fields from a different experiment.
+    group_key = "|".join([experiment, vehicle, time_code, loc_s]) if all([experiment, vehicle, time_code, loc_s]) else f"未识别_p{i+1}"
 
-        fname = build_filename_base(experiment, vehicle, time_code, loc_s)
-        meta = PageMeta(
-            page_index=i,
-            experiment=experiment,
-            vehicle=vehicle,
-            time_raw=time_disp,
-            time_code=time_code,
-            location_raw=loc_s,
-            group_key=group_key,
-            filename_base=fname,
-            note=note,
-            vehicle_raw=vehicle_raw,
-            location_ocr_raw=location_ocr_raw,
-        )
-        metas.append(meta)
-        if not group_key.startswith("未识别_"):
-            prev = meta
-        print(
-            f"  [{i+1}/{n}] {fname}  ({note})" if note else f"  [{i+1}/{n}] {fname}",
-            flush=True,
-        )
+    fname = build_filename_base(experiment, vehicle, time_code, loc_s)
+    meta = PageMeta(
+        page_index=i,
+        experiment=experiment,
+        vehicle=vehicle,
+        time_raw=time_disp,
+        time_code=time_code,
+        location_raw=loc_s,
+        group_key=group_key,
+        filename_base=fname,
+        note=note,
+        vehicle_raw=vehicle_raw,
+        location_ocr_raw=location_ocr_raw,
+        place_evidence=place_evidence,
+    )
+    return meta
 
-    doc.close()
-    return metas
+
+def scan_pdf(pdf_path,top_ratio=0.4,max_pages=None,debug_dir=None,resume_dir=None):
+    from contextlib import ExitStack
+    from dataclasses import asdict
+    import time
+    from location_catalog import load as load_places
+    from scan_checkpoint import Checkpoint,identity
+    metas=[];started=time.monotonic();processed=0
+    with ExitStack() as stack:
+        doc=stack.enter_context(fitz.open(pdf_path))
+        n=doc.page_count if max_pages is None else min(doc.page_count,max_pages)
+        rules=load_confirmed_rules();places=load_places()
+        checkpoint=stack.enter_context(Checkpoint(resume_dir,identity(pdf_path,top_ratio,Path(__file__).resolve().parent))) if resume_dir else None
+        cached=min(n,len(checkpoint.rows)) if checkpoint else 0
+        print(f'共{doc.page_count}页，本次处理{n}页；可恢复已完成的{cached}页。',flush=True)
+        for i in range(n):
+            pause_path=Path(resume_dir).parent/'pause-request' if resume_dir else None
+            if pause_path and pause_path.exists():
+                pause_path.unlink()
+                raise InterruptedError('已暂停识别，已完成页面保存在本机；再次点击识别即可继续。')
+            if checkpoint and i<len(checkpoint.rows):
+                meta=PageMeta(**checkpoint.rows[i])
+            else:
+                meta=scan_one_page(doc[i],i,top_ratio,debug_dir,rules,places)
+                if checkpoint:checkpoint.append(asdict(meta))
+                processed+=1
+            metas.append(meta)
+            print(f'  [{i+1}/{n}] {meta.filename_base}  ({meta.note})',flush=True)
+            if (i+1)%20==0:
+                fitz.TOOLS.store_shrink(100)
+                if processed:
+                    average=(time.monotonic()-started)/processed;remaining=(n-i-1)*average
+                    print(f'进度{i+1}/{n}；本次平均{average:.1f}秒/页，预计剩余{remaining/60:.1f}分钟（随扫描质量变化）。',flush=True)
+        return metas
 
 
 def refresh_filename(meta):
@@ -778,6 +812,7 @@ def write_preview_csv(metas: List[PageMeta], csv_path: Path, version: str) -> No
                 "是否示例大纲",
                 "大纲车辆",
                 "大纲来源",
+                "地点核对截图",
             ]
         )
         for m in metas:
@@ -803,6 +838,7 @@ def write_preview_csv(metas: List[PageMeta], csv_path: Path, version: str) -> No
                     "是" if m.outline_example else "否",
                     m.outline_vehicle,
                     m.outline_source,
+                    m.place_evidence,
                 ]
             )
     print(f"已写入预览: {csv_path}")
@@ -857,24 +893,29 @@ def split_pdf(
 ) -> List[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     groups = group_contiguous(metas) if merge_contiguous else [(m, [m.page_index]) for m in metas]
-    src = fitz.open(pdf_path)
-    used: dict = {}
-    written: List[Path] = []
+    import uuid
+    from outline_manager_backend import InstanceLock
+    lock=InstanceLock(out_dir/'.export.lock')
+    if not lock.acquire():raise RuntimeError('另一个导出任务正在写入此目录，请等待完成')
+    used={};written=[]
+    try:
+        with fitz.open(pdf_path) as src:
+            for meta,pages in groups:
+                refresh_filename(meta)
+                dest=unique_filename(out_dir,f'{meta.filename_base}-{version}',used)
+                temp=out_dir/(uuid.uuid4().hex+'.part')
+                try:
+                    with fitz.open() as new_doc:
+                        for pi in pages:new_doc.insert_pdf(src,from_page=pi,to_page=pi)
+                        new_doc.save(str(temp))
+                    temp.replace(dest)
+                finally:
+                    if temp.exists():temp.unlink()
+                written.append(dest)
+                print(f'  -> {dest.name}  (页 '+', '.join(str(p+1) for p in pages)+')',flush=True)
+                if len(written)%20==0:fitz.TOOLS.store_shrink(100)
+    finally:lock.release()
 
-    for meta, pages in groups:
-        refresh_filename(meta)
-        base = f"{meta.filename_base}-{version}"
-        dest = unique_filename(out_dir, base, used)
-        new_doc = fitz.open()
-        for pi in pages:
-            new_doc.insert_pdf(src, from_page=pi, to_page=pi)
-        new_doc.save(dest)
-        new_doc.close()
-        written.append(dest)
-        page_human = ",".join(str(p + 1) for p in pages)
-        print(f"  -> {dest.name}  (页 {page_human})")
-
-    src.close()
     return written
 
 
@@ -928,6 +969,7 @@ def load_preview_csv(csv_path: Path) -> List[PageMeta]:
                     outline_example=outline_example,
                     outline_vehicle=row.get("大纲车辆", ""),
                     outline_source=row.get("大纲来源", ""),
+                    place_evidence=row.get("地点核对截图", ""),
                 )
             )
     return metas
@@ -949,13 +991,17 @@ def cmd_preview(args: argparse.Namespace) -> int:
     if not pdf.exists():
         print(f"找不到输入文件: {pdf}", file=sys.stderr)
         return 1
-    metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages, debug_dir=out_dir / "vehicle_debug")
+    out_dir.mkdir(parents=True,exist_ok=True)
+    marker=out_dir/"preview-in-progress.json"
+    marker.write_text(str(pdf),encoding="utf-8")
+    metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages, debug_dir=out_dir / "vehicle_debug", resume_dir=out_dir / "scan_progress")
     catalog=active_outline(getattr(args,'outline',None))
     attach_outline(metas,catalog)
     write_preview_csv(metas, out_dir / "preview.csv", version)
     write_preview_identity(pdf, out_dir)
     write_outline_identity(out_dir,catalog)
 
+    marker.unlink()
     groups = [(m, [m.page_index]) for m in metas]
     print(f"\n预计拆成 {len(groups)} 个实验文件（版本 {version}）：")
     for meta, pages in groups:
@@ -977,6 +1023,8 @@ def cmd_split(args: argparse.Namespace) -> int:
         print(f"找不到输入文件: {pdf}", file=sys.stderr)
         return 1
 
+    if (out_dir/"preview-in-progress.json").exists():
+        raise ValueError("上一次预览尚未完整完成，请先重新识别以恢复进度，不能导出旧清单。")
     preview_csv = out_dir / "preview.csv"
     if preview_csv.exists() and not args.rescan:
         count=verify_preview_identity(pdf,out_dir)
@@ -999,7 +1047,7 @@ def cmd_split(args: argparse.Namespace) -> int:
         if not page_numbers or len(set(page_numbers))!=len(page_numbers) or any(i<0 or i>=count for i in page_numbers):
             raise ValueError("预览清单的页码重复、为空或超出原PDF范围，请检查清单。")
     else:
-        metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages, debug_dir=out_dir / "vehicle_debug")
+        metas = scan_pdf(pdf, top_ratio=args.top_ratio, max_pages=args.max_pages, debug_dir=out_dir / "vehicle_debug", resume_dir=None if args.rescan else out_dir / "scan_progress")
         catalog=active_outline(getattr(args,'outline',None))
         attach_outline(metas,catalog)
         write_preview_csv(metas, preview_csv, version)
@@ -1106,8 +1154,11 @@ def main() -> int:
     print(f"试验记录归档工具 v{PROGRAM_VERSION}：按字段定位识别，使用核对清单导出。",flush=True)
     parser = build_parser()
     args = parser.parse_args()
-    return args.func(args)
+    try:return args.func(args)
+    except InterruptedError as exc:
+        print(str(exc),flush=True);return 2
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
