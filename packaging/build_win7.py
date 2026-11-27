@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parent.parent
 ENGINE_URL='https://github.com/hiroi-sora/RapidOCR-json/releases/download/v0.2.0/RapidOCR-json_v0.2.0.7z'
 ENGINE_SHA='7ad9b283d03436c6cd0296723188699299cb4e5cf9140b410c59543aa5793c40'
-FILES=['desktop_app.py','outline_manager.py','outline_manager_backend.py','split_experiments.py','outline_catalog.py','vehicle_outlines.py','full_outline_pdf.py','demo_vehicle_data.py','field_rules.json','legacy_ocr.py','win7_diagnostics.py']
+FILES=['desktop_app.py','outline_manager.py','outline_manager_backend.py','split_experiments.py','outline_catalog.py','vehicle_outlines.py','full_outline_pdf.py','demo_vehicle_data.py','field_rules.json','location_catalog.py','locations.csv','scan_checkpoint.py','legacy_ocr.py','win7_diagnostics.py']
 
 def digest(path):
     h=hashlib.sha256()
@@ -26,7 +26,7 @@ def build():
     for name in ['desktop_app.py','outline_manager.py']:
         p=payload/name;s=p.read_text(encoding='utf-8')
         if name=='desktop_app.py':
-            s=s.replace("VERSION='1.6.0'","VERSION='1.6.1-Win7 Trial'")
+            s=s.replace("VERSION='1.6.0'","VERSION='1.6.2-Win7 Trial'")
             s=s.replace("logging.basicConfig(filename=str(ROOT/'logs/desktop_app.log'),encoding='utf-8',level=logging.INFO)","logging.basicConfig(handlers=[logging.FileHandler(str(ROOT/'logs/desktop_app.log'),encoding='utf-8')],level=logging.INFO)")
         else:
             s=s.replace("logging.basicConfig(filename=str(ROOT/'logs'/'outline_manager.log'),level=logging.INFO,encoding='utf-8',format='%(asctime)s %(levelname)s %(message)s')","logging.basicConfig(handlers=[logging.FileHandler(str(ROOT/'logs'/'outline_manager.log'),encoding='utf-8')],level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')")
@@ -34,7 +34,7 @@ def build():
     p=payload/'split_experiments.py';s=p.read_text(encoding='utf-8');anchor='    global _OCR\n'
     assert s.count(anchor)==1
     s=s.replace(anchor,anchor+"    if (Path(__file__).resolve().parent/'legacy_engine.json').is_file():\n        if _OCR is None:\n            from legacy_ocr import LegacyOCR\n            _OCR=LegacyOCR()\n        return _OCR\n",1)
-    s=s.replace('PROGRAM_VERSION = "1.6.0"','PROGRAM_VERSION = "1.6.1-Win7 Trial"');p.write_text(s,encoding='utf-8')
+    s=s.replace('PROGRAM_VERSION = "1.6.0"','PROGRAM_VERSION = "1.6.2-Win7 Trial"');p.write_text(s,encoding='utf-8')
     runtime=payload/'runtime';base=Path(sys.base_prefix);runtime.mkdir(exist_ok=True)
     for name in ['python.exe','pythonw.exe','python3.dll','python38.dll','vcruntime140.dll','vcruntime140_1.dll','LICENSE.txt']:
         if (base/name).is_file():shutil.copy2(base/name,runtime/name)
@@ -68,7 +68,7 @@ def build():
     script='@echo off\r\nsetlocal\r\ncd /d "%~dp0"\r\nif not exist logs mkdir logs\r\n"%~dp0runtime\\python.exe" "%~dp0win7_diagnostics.py" > "%~dp0logs\\startup-check.txt" 2>&1\r\nif not "%errorlevel%"=="0" goto failed\r\nstart "" "%~dp0runtime\\pythonw.exe" "%~dp0desktop_app.py"\r\nexit /b\r\n:failed\r\necho Compatibility check failed. See logs\\startup-check.txt.\r\necho Windows 7 SP1 x64 and approved Universal CRT prerequisites are required.\r\npause\r\n'
     (payload/'Start.bat').write_bytes(script.encode('ascii'));(payload/'启动软件.bat').write_bytes(script.encode('ascii'))
     check='@echo off\r\ncd /d "%~dp0"\r\n"%~dp0runtime\\python.exe" "%~dp0win7_diagnostics.py"\r\npause\r\n';(payload/'检查运行环境.bat').write_bytes(check.encode('ascii'))
-    for src in ['WIN7_GUIDE.md','WIN7_TEST_SCOPE.md']:shutil.copy2(ROOT/'packaging'/src,payload/src)
+    for src in ['WIN7_GUIDE.md','WIN7_TEST_SCOPE.md','SCALE_LOCATION_FIX.md']:shutil.copy2(ROOT/'packaging'/src,payload/src)
     # Preserve complete upstream binary distribution (including its licenses/models).
     upstream=ROOT/'packaging/RAPIDOCR_LICENSE.txt';shutil.copy2(upstream,payload/'RAPIDOCR_LICENSE.txt')
     (payload/'THIRD_PARTY_NOTICES.txt').write_text('Python: PSF License, runtime/LICENSE.txt.\nRapidOCR-json v0.2.0: MIT, RAPIDOCR_LICENSE.txt; '+ENGINE_URL+'\nRapidOcrOnnx/ONNX Runtime/PaddleOCR model licenses: see bundled upstream files and upstream source.\nOther package metadata and licenses remain in runtime/Lib/site-packages.\nNo proprietary trial records or real outlines are included.\n',encoding='utf-8')
