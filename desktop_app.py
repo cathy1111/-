@@ -40,9 +40,6 @@ class DesktopApp:
         ttk.Label(frame,text='工作目录：'+str(ROOT)).pack(anchor='w',pady=(10,0))
         try:self.path.set(json.loads((ROOT/'desktop_state.json').read_text(encoding='utf-8')).get('pdf',''))
         except (OSError,ValueError):pass
-        from outline_migration import migrate
-        _,migration_message=migrate(ROOT)
-        self.status.set(migration_message)
         root.after(100,self.poll)
     def open_file(self,path):
         if os.name=='nt':os.startfile(str(path))
