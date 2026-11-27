@@ -1,6 +1,6 @@
 # Fixed legacy-compatible Python 3.8 dependencies. OCR is a separate local binary.
 PyMuPDF==1.20.2
-numpy==1.23.5
+numpy==1.21.6
 Pillow==9.5.0
 python-docx==0.8.11
 lxml==4.9.3
